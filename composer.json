@@ -1,0 +1,67 @@
+{
+    "name": "ismailnakkar/laravel-email-integrity",
+    "description": "Refuse disposable and unroutable email domains at the point they are entered, in Laravel.",
+    "keywords": [
+        "laravel",
+        "email",
+        "validation",
+        "disposable",
+        "throwaway",
+        "fraud",
+        "mx"
+    ],
+    "homepage": "https://github.com/ismailnakkar/laravel-email-integrity",
+    "license": "MIT",
+    "type": "library",
+    "authors": [
+        {
+            "name": "Ismail Nakkar",
+            "email": "juge.steam@gmail.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/ismailnakkar/laravel-email-integrity/issues"
+    },
+    "require": {
+        "php": "^8.2",
+        "laravel/framework": "^12.1 || ^13.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.18",
+        "orchestra/testbench": "^10.0 || ^11.0",
+        "phpunit/phpunit": "^11.5 || ^12.0"
+    },
+    "suggest": {
+        "ext-intl": "Normalises an internationalised domain to punycode before the list lookup. Without it an IDN is matched as typed, so the unicode spelling of a listed domain is not caught."
+    },
+    "autoload": {
+        "psr-4": {
+            "EmailIntegrity\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "EmailIntegrity\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "lint": "vendor/bin/pint",
+        "check": [
+            "vendor/bin/pint --test",
+            "vendor/bin/phpunit"
+        ]
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "EmailIntegrity\\EmailIntegrityServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
