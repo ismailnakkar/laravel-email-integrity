@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace EmailIntegrity\Tests;
 
 use EmailIntegrity\DisposableDomains;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 use Throwable;
@@ -74,11 +76,14 @@ class UpdateTest extends TestCase
         }
     }
 
-    public function test_the_command_reports_failure_with_a_non_zero_exit(): void
+    public function test_a_failed_download_exits_non_zero_and_is_reported(): void
     {
+        Exceptions::fake();
         Http::fake(['list.test/*' => Http::response('', 500)]);
 
         $this->artisan('email-integrity:update')->assertExitCode(1);
+
+        Exceptions::assertReported(RequestException::class);
     }
 
     public function test_the_command_succeeds_on_a_good_fetch(): void

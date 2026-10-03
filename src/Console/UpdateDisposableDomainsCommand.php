@@ -19,8 +19,10 @@ class UpdateDisposableDomainsCommand extends Command
         try {
             $count = $domains->update();
         } catch (Throwable $e) {
-            // Non-zero so a scheduled run is visibly failing rather than quietly serving
-            // a list that is getting older every day.
+            // Reported so the handler sees the cause: the scheduler reports only the exit code,
+            // and not even that for a runInBackground event.
+            report($e);
+
             $this->components->error($e->getMessage());
 
             return self::FAILURE;

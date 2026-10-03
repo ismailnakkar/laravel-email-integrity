@@ -30,6 +30,9 @@ silently stops updating is a list that silently stops working:
 Schedule::command('email-integrity:update')->dailyAt('03:00');
 ```
 
+A failed update exits non-zero and passes the exception to `report()`, so it reaches your exception
+handler with no `onFailure` hook.
+
 ## Use
 
 ```php
