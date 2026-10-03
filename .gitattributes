@@ -1,4 +1,5 @@
 # Keep development-only files out of the dist archive Packagist builds.
+/.github          export-ignore
 /tests            export-ignore
 /phpunit.xml      export-ignore
 /pint.json        export-ignore

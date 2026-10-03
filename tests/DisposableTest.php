@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace EmailIntegrity\Tests;
 
+use EmailIntegrity\DisposableDomains;
 use EmailIntegrity\EmailIntegrity;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 
 class DisposableTest extends TestCase
 {
@@ -141,6 +144,40 @@ class DisposableTest extends TestCase
 
         $this->assertTrue($this->integrity()->hostResolves("a@exam\0ple.com"));
         $this->assertFalse($this->integrity()->isDisposable("a@mailinator\0.com"));
+    }
+
+    /** A queue worker or Octane outlives one request, so a refreshed list must reach it at the next job. */
+    public function test_the_list_is_reloaded_for_each_job_or_request(): void
+    {
+        $this->assertFalse($this->integrity()->isDisposable('a@fresh.test'));
+
+        $this->withDisposableList(['fresh.test']);
+        $this->app->forgetScopedInstances();
+
+        $this->assertTrue($this->integrity()->isDisposable('a@fresh.test'));
+    }
+
+    /** A missing file is never cached as "nothing is disposable", and an update replaces what the cache holds. */
+    public function test_the_cache_holds_only_a_real_list_and_an_update_replaces_it(): void
+    {
+        unlink($path = $this->withDisposableList([]));
+        config(['email-integrity.disposable.cache.enabled' => true]);
+
+        $this->assertFalse($this->integrity()->isDisposable('a@mailinator.com'));
+        $this->assertFalse(Cache::has('email-integrity:disposable-domains'));
+
+        file_put_contents($path, json_encode(['mailinator.com']));
+        $this->app->forgetScopedInstances();
+
+        $this->assertTrue($this->integrity()->isDisposable('a@mailinator.com'));
+        $this->assertTrue(Cache::has('email-integrity:disposable-domains'));
+
+        config(['email-integrity.disposable.sources' => ['https://list.test/domains.json'], 'email-integrity.disposable.min_domains' => 1]);
+        Http::fake(['list.test/*' => Http::response(['fresh.test'])]);
+        $this->app->make(DisposableDomains::class)->update();
+
+        $this->assertFalse($this->integrity()->isDisposable('a@mailinator.com'));
+        $this->assertTrue($this->integrity()->isDisposable('a@fresh.test'));
     }
 
     public function test_a_missing_list_file_blocks_nothing(): void

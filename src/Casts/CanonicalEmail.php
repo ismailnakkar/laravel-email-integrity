@@ -9,14 +9,7 @@ use Illuminate\Contracts\Database\Eloquent\CastsAttributes;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Keeps a canonical-identity column filled from the address as it was typed, so a unique
- * index can refuse `a+1@gmail.com` to someone already registered as `a.b@gmail.com`.
- *
- * A cast and not a `saving` hook: `saveQuietly()` and `withoutEvents()` fire no events, and
- * a hook that silently skips leaves a NULL in the column — which a unique index accepts
- * without limit, turning the whole mechanism off for exactly the rows that dodged it.
- * Assignment cannot be skipped that way. A raw query builder insert still bypasses both,
- * which is why the index, not this class, is the enforcement.
+ * Fills the canonical-identity column on assignment: a cast, because `saveQuietly()` skips a `saving` hook.
  *
  * @implements CastsAttributes<string|null, string|null>
  */

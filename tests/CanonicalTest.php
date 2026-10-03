@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace EmailIntegrity\Tests;
 
-use EmailIntegrity\EmailIntegrity;
+use EmailIntegrity\EmailAddress;
 
 /**
  * Aliasing is how one person becomes many accounts without a second inbox. Measured on
@@ -15,7 +15,7 @@ class CanonicalTest extends TestCase
 {
     private function canonical(mixed $email): ?string
     {
-        return $this->app->make(EmailIntegrity::class)->canonical($email);
+        return EmailAddress::canonical($email);
     }
 
     public function test_a_plus_tag_is_stripped(): void
@@ -54,6 +54,20 @@ class CanonicalTest extends TestCase
 
         $this->assertSame('a@xn--5nx.cc', $this->canonical("a@\u{7075}.cc"));
         $this->assertSame($this->canonical('a@xn--5nx.cc'), $this->canonical("a@\u{7075}.cc"));
+    }
+
+    /**
+     * Since 2010 `straße.de` and `strasse.de` are two registrable domains. Transitional IDNA folds ß to ss and
+     * hands one the other's identity; Symfony Mime puts the nontransitional form on the wire.
+     */
+    public function test_a_nontransitional_domain_keeps_its_own_identity(): void
+    {
+        if (! function_exists('idn_to_ascii')) {
+            $this->markTestSkipped('ext-intl is absent, so an IDN stays as typed.');
+        }
+
+        $this->assertSame('x@xn--strae-oqa.de', $this->canonical("x@stra\u{DF}e.de"));
+        $this->assertNotSame($this->canonical('x@strasse.de'), $this->canonical("x@stra\u{DF}e.de"));
     }
 
     /** Elsewhere a dot is part of the name; collapsing it would merge two real people. */
@@ -95,5 +109,32 @@ class CanonicalTest extends TestCase
     {
         $this->assertSame('jack@gmail.com', $this->canonical('JACK@Gmail.COM'));
         $this->assertNotSame($this->canonical('jack@gmail.com'), $this->canonical("jac\u{212A}@gmail.com"));
+    }
+
+    /** Providers echo the header, so a recipient or sender arrives as `Name <address>`. */
+    public function test_bare_reads_the_address_inside_the_last_angle_brackets(): void
+    {
+        $this->assertSame('Jane.Doe@Example.com', EmailAddress::bare(' "Doe, <Jane>" < Jane.Doe@Example.com > '));
+        $this->assertSame('jane@example.com', EmailAddress::bare(' jane@example.com '));
+    }
+
+    /** The mailbox as it was addressed: only case and the domain's spelling are folded. */
+    public function test_literal_keeps_the_local_part_and_folds_case_and_the_domain(): void
+    {
+        $this->assertSame('jane.doe+news@gmail.com', EmailAddress::literal('Jane <Jane.Doe+News@GMAIL.com.>'));
+
+        if (function_exists('idn_to_ascii')) {
+            $this->assertSame('x@xn--strae-oqa.de', EmailAddress::literal("x@stra\u{DF}e.de"));
+        }
+
+        $this->assertNull(EmailAddress::literal('undisclosed recipients'));
+        $this->assertNull(EmailAddress::literal('@example.com'));
+        $this->assertNull(EmailAddress::literal('a@[192.0.2.1]'));
+    }
+
+    /** A quoted local part may hold `<…>`; reading it as the header form would key a stranger's bounce on the victim. */
+    public function test_literal_does_not_read_angle_brackets_inside_a_quoted_local_part(): void
+    {
+        $this->assertSame('"x<victim@corp.example>"@attacker.example', EmailAddress::literal('"x<victim@corp.example>"@attacker.example'));
     }
 }

@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace EmailIntegrity\Tests;
 
+use EmailIntegrity\EmailIntegrity;
 use EmailIntegrity\Rules\NotDisposable;
+use EmailIntegrity\Rules\NotSuppressed;
 use EmailIntegrity\Rules\RoutableDomain;
+use EmailIntegrity\SuppressedAddress;
+use EmailIntegrity\SuppressionReason;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 
@@ -107,6 +111,37 @@ class RulesTest extends TestCase
         $this->assertTrue(Cache::has('email-integrity:host:' . hash('xxh128', 'definitely-not-real.invalid')));
     }
 
+    /** A resolver that times out would make every signup wait out four lookups, so an outage is remembered briefly. */
+    public function test_a_remembered_outage_answers_fail_open_without_a_lookup(): void
+    {
+        if (! @checkdnsrr('a.root-servers.net', 'A')) {
+            $this->markTestSkipped('No resolver: a dead domain would answer fail_open anyway.');
+        }
+
+        config([
+            'email-integrity.host.enabled'   => true,
+            'email-integrity.host.fail_open' => true,
+        ]);
+        Cache::put('email-integrity:resolver-down', true, 30);
+
+        $this->assertTrue($this->validate('a@definitely-not-real.invalid', [
+            $this->app->make(RoutableDomain::class),
+        ]));
+        $this->assertFalse(Cache::has('email-integrity:host:' . hash('xxh128', 'definitely-not-real.invalid')));
+    }
+
+    /** RFC 7505: example.com publishes `MX 0 .` beside a live A record, which says it takes no mail. */
+    public function test_a_null_mx_refuses_mail_despite_an_a_record(): void
+    {
+        if (! @checkdnsrr('a.root-servers.net', 'A')) {
+            $this->markTestSkipped('No resolver: the lookup cannot run.');
+        }
+
+        config(['email-integrity.host.enabled' => true]);
+
+        $this->assertFalse($this->app->make(EmailIntegrity::class)->hostResolves('a@example.com'));
+    }
+
     /**
      * Why the README says `email:strict` and not `email`. An address literal has no domain
      * to read, so both rules here pass it by design — which makes bare `email` a hole big
@@ -138,5 +173,30 @@ class RulesTest extends TestCase
 
         $this->assertFalse($validator->passes());
         $this->assertStringContainsString('Temporary email addresses', $validator->errors()->first('email'));
+    }
+
+    /** A complaint keeps the inbox out under any spelling, so a new account cannot route mail back into it. */
+    public function test_the_suppression_rule_refuses_a_blocked_address(): void
+    {
+        config(['email-integrity.suppression.enabled' => true]);
+        SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::complained);
+
+        $validator = Validator::make(['email' => 'janedoe+new@gmail.com'], ['email' => [new NotSuppressed]]);
+
+        $this->assertFalse($validator->passes());
+        $this->assertSame('This email address cannot receive our mail.', $validator->errors()->first('email'));
+        $this->assertTrue($this->validate('someone@gmail.com', [new NotSuppressed]));
+    }
+
+    public function test_the_suppression_rule_has_a_string_name(): void
+    {
+        config(['email-integrity.suppression.enabled' => true]);
+        SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::complained);
+
+        $validator = Validator::make(['email' => 'janedoe+new@gmail.com'], ['email' => 'bail|email:strict|not_suppressed']);
+
+        $this->assertFalse($validator->passes());
+        $this->assertSame('This email address cannot receive our mail.', $validator->errors()->first('email'));
+        $this->assertTrue($this->validate('someone@gmail.com', ['not_suppressed']));
     }
 }

@@ -9,7 +9,6 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
-use Throwable;
 
 class UpdateTest extends TestCase
 {
@@ -68,10 +67,31 @@ class UpdateTest extends TestCase
 
         $before = file_get_contents($this->path);
 
+        $this->expectException(RequestException::class);
+
         try {
             $this->domains()->update();
-            $this->fail('The update should not have succeeded.');
-        } catch (Throwable) {
+        } finally {
+            $this->assertSame($before, file_get_contents($this->path));
+        }
+    }
+
+    /** Checked per source: a truncated second list would otherwise shrink the merged one without failing. */
+    public function test_a_short_source_is_refused_even_when_the_total_clears_the_floor(): void
+    {
+        config(['email-integrity.disposable.sources' => ['https://list.test/a.json', 'https://list.test/b.json']]);
+        Http::fake([
+            'list.test/a.json' => Http::response(['one.test', 'two.test']),
+            'list.test/b.json' => Http::response(['three.test']),
+        ]);
+
+        $before = file_get_contents($this->path);
+
+        $this->expectException(RuntimeException::class);
+
+        try {
+            $this->domains()->update();
+        } finally {
             $this->assertSame($before, file_get_contents($this->path));
         }
     }

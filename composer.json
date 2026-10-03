@@ -1,6 +1,6 @@
 {
     "name": "ismailnakkar/laravel-email-integrity",
-    "description": "Refuse disposable and unroutable email domains at the point they are entered, in Laravel.",
+    "description": "Refuse disposable and unroutable email domains at the point they are entered, and stop mailing addresses that bounced or complained, in Laravel.",
     "keywords": [
         "laravel",
         "email",
@@ -8,7 +8,10 @@
         "disposable",
         "throwaway",
         "fraud",
-        "mx"
+        "mx",
+        "bounce",
+        "suppression",
+        "webhook"
     ],
     "homepage": "https://github.com/ismailnakkar/laravel-email-integrity",
     "license": "MIT",
@@ -29,10 +32,17 @@
     "require-dev": {
         "laravel/pint": "^1.18",
         "orchestra/testbench": "^10.0 || ^11.0",
-        "phpunit/phpunit": "^11.5 || ^12.0"
+        "phpunit/phpunit": "^11.5 || ^12.0",
+        "symfony/resend-mailer": "^7.4.18 || ^8.1.6",
+        "symfony/webhook": "^7.4 || ^8.0"
+    },
+    "conflict": {
+        "symfony/resend-mailer": "<7.4.18 || >=8.0,<8.1.6"
     },
     "suggest": {
-        "ext-intl": "Normalises an internationalised domain to punycode before the list lookup. Without it an IDN is matched as typed, so the unicode spelling of a listed domain is not caught."
+        "ext-intl": "Normalises an internationalised domain to punycode before the list lookup. Without it an IDN is matched as typed, so the unicode spelling of a listed domain is not caught.",
+        "symfony/webhook": "Required by the suppression webhook (^7.4 || ^8.0).",
+        "symfony/resend-mailer": "The default suppression webhook parser, for Resend (^7.4.18 || ^8.1.6). Another provider needs its own bridge."
     },
     "autoload": {
         "psr-4": {

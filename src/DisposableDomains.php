@@ -19,6 +19,8 @@ use RuntimeException;
  */
 class DisposableDomains
 {
+    private const CACHE_KEY = 'email-integrity:disposable-domains';
+
     /** @var array<string, true>|null */
     private ?array $domains = null;
 
@@ -48,7 +50,7 @@ class DisposableDomains
         // Null, not [], for an empty list: the cache treats null as a miss, so a list
         // file that is not there yet cannot be remembered as "nothing is disposable".
         return $this->domains = $this->cache->store($cache['store'] ?? null)->remember(
-            $cache['key'] ?? 'email-integrity:disposable-domains',
+            self::CACHE_KEY,
             $cache['ttl'] ?? 86400,
             fn (): ?array => $this->loadFromStorage() ?: null,
         ) ?? [];
@@ -57,9 +59,9 @@ class DisposableDomains
     /**
      * Fetches every source and writes the merged list.
      *
-     * Nothing is written until every source has answered and the total clears
-     * `min_domains`: a half-fetched list that silently admits throwaway addresses is
-     * worse than yesterday's list, so a failure leaves the old file untouched.
+     * Nothing is written until every source has answered with at least `min_domains`:
+     * a half-fetched list that silently admits throwaway addresses is worse than
+     * yesterday's list, so a failure leaves the old file untouched.
      *
      * @return int The number of domains written.
      */
@@ -72,7 +74,7 @@ class DisposableDomains
         $merged = [];
 
         foreach ($sources as $url) {
-            foreach ($this->fetch((string)$url, $timeout) as $domain) {
+            foreach ($this->fetch((string)$url, $timeout, $minimum) as $domain) {
                 if (is_string($domain) && ($domain = $this->normalise($domain)) !== '') {
                     $merged[$domain] = true;
                 }
@@ -100,18 +102,18 @@ class DisposableDomains
         $cache = $this->config->get('email-integrity.disposable.cache');
 
         if ($cache['enabled'] ?? true) {
-            $this->cache->store($cache['store'] ?? null)
-                ->forget($cache['key'] ?? 'email-integrity:disposable-domains');
+            $this->cache->store($cache['store'] ?? null)->forget(self::CACHE_KEY);
         }
     }
 
     /** @return array<int, mixed> */
-    private function fetch(string $url, int $timeout): array
+    private function fetch(string $url, int $timeout, int $minimum): array
     {
         $domains = Http::timeout($timeout)->get($url)->throw()->json();
 
-        if (! is_array($domains) || $domains === []) {
-            throw new RuntimeException('The disposable-domains source returned no usable list: ' . $url);
+        // Per source: a truncated second list would otherwise shrink the merged one without failing.
+        if (! is_array($domains) || $domains === [] || count($domains) < $minimum) {
+            throw new RuntimeException(sprintf('The disposable-domains source returned no usable list of %d domains: %s', $minimum, $url));
         }
 
         return $domains;
@@ -128,19 +130,8 @@ class DisposableDomains
 
         $decoded = json_decode((string)file_get_contents($path), true);
 
-        if (! is_array($decoded)) {
-            return [];
-        }
-
-        $domains = [];
-
-        foreach ($decoded as $domain) {
-            if (is_string($domain) && ($domain = $this->normalise($domain)) !== '') {
-                $domains[$domain] = true;
-            }
-        }
-
-        return $domains;
+        // update() wrote it normalised.
+        return is_array($decoded) ? array_fill_keys(array_filter($decoded, is_string(...)), true) : [];
     }
 
     /** @param list<string> $domains */

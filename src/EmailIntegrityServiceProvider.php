@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace EmailIntegrity;
 
 use Closure;
+use EmailIntegrity\Console\LiftSuppressionCommand;
 use EmailIntegrity\Console\UpdateDisposableDomainsCommand;
+use EmailIntegrity\Listeners\DropSuppressedMail;
+use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Factory as ValidationFactory;
 
@@ -15,11 +19,9 @@ class EmailIntegrityServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/email-integrity.php', 'email-integrity');
 
-        // Singletons: the domain list is a 74k-entry set, and resolving it per validated
-        // field would reload it for every address in a batch. The container autowires
-        // both constructors from their type hints.
-        $this->app->singleton(DisposableDomains::class);
-        $this->app->singleton(EmailIntegrity::class);
+        // Scoped: the 74k-entry list loads once per request or job, and a queue worker or Octane sees the next update.
+        $this->app->scoped(DisposableDomains::class);
+        $this->app->scoped(EmailIntegrity::class);
     }
 
     public function boot(): void
@@ -31,26 +33,28 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         $this->callAfterResolving('validator', function (ValidationFactory $validator): void {
             $this->extend($validator, 'not_disposable', 'disposable', fn (EmailIntegrity $email, mixed $value): bool => ! $email->isDisposable($value));
             $this->extend($validator, 'routable_domain', 'unroutable', fn (EmailIntegrity $email, mixed $value): bool => $email->hostResolves($value));
+            $this->extend($validator, 'not_suppressed', 'suppressed', fn (EmailIntegrity $email, mixed $value): bool => ! is_string($value) || SuppressedAddress::blocking($value) === null);
         });
 
+        // Always listening and inert while suppression is off: the switch is read at send time. Package providers
+        // boot before the app's, so this runs ahead of the app's own MessageSending listeners.
+        Event::listen(MessageSending::class, DropSuppressedMail::class);
+
         if ($this->app->runningInConsole()) {
-            $this->commands([UpdateDisposableDomainsCommand::class]);
+            $this->commands([UpdateDisposableDomainsCommand::class, LiftSuppressionCommand::class]);
 
             $this->publishes([
                 __DIR__ . '/../config/email-integrity.php' => config_path('email-integrity.php'),
             ], 'email-integrity-config');
+
+            // Publish-only: apps that already keep a `suppressed_addresses` table must not get a second one.
+            $this->publishesMigrations([
+                __DIR__ . '/../database/migrations' => database_path('migrations'),
+            ], 'email-integrity-migrations');
         }
     }
 
-    /**
-     * A string name for a rule, so it composes in a pipe string like any core rule.
-     *
-     * The message is set on the validator mid-validation rather than through
-     * Validator::extend's third argument, which is stored raw and never reaches the
-     * translator — it would print the key itself. Resolving it when the extension is
-     * registered is no better: boot() runs before the middleware that sets the locale,
-     * so every locale would get whichever one booted.
-     */
+    /** The message is set mid-validation: extend()'s own is never translated, and boot() runs before the locale is set. */
     private function extend(ValidationFactory $validator, string $rule, string $message, Closure $passes): void
     {
         $validator->extend($rule, function (string $attribute, mixed $value, array $parameters, $validator) use ($rule, $message, $passes): bool {

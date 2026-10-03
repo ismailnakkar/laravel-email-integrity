@@ -7,16 +7,11 @@ namespace EmailIntegrity;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository as Config;
 
-/**
- * The two questions worth asking about an address before you trust it with money:
- * is the domain a throwaway, and can it receive mail at all.
- *
- * Both answers are about the DOMAIN. Neither says the mailbox exists — only a
- * verification link does that, and this package deliberately stops short of it so the
- * app owns when to demand one.
- */
+/** Is the domain a throwaway, and can it receive mail at all: both about the domain, never the mailbox. */
 class EmailIntegrity
 {
+    private const RESOLVER_DOWN = 'email-integrity:resolver-down';
+
     public function __construct(
         private readonly Config $config,
         private readonly CacheFactory $cache,
@@ -28,15 +23,7 @@ class EmailIntegrity
         return (bool)$this->config->get('email-integrity.enabled', true);
     }
 
-    /**
-     * The inbox this address actually reaches, for storing next to the address so two
-     * spellings of one mailbox cannot become two accounts.
-     *
-     * Uniqueness stays the app's to enforce, because the package cannot migrate your users
-     * table: give the canonical value its own column and unique index, and let the
-     * CanonicalEmail cast keep it filled. Null when the address has no provable identity —
-     * store the address as typed instead, since a unique index accepts unlimited NULLs.
-     */
+    /** @deprecated Use EmailAddress::canonical(); removed in 2.0. */
     public function canonical(mixed $email): ?string
     {
         return EmailAddress::canonical($email);
@@ -94,13 +81,15 @@ class EmailIntegrity
         // persists — a ten-second blip would otherwise pin a wrong verdict for the hour.
         $ttl = fn (?bool $answer): int => $answer === null ? 0 : (int)($host['cache_ttl'] ?? 3600);
 
-        $resolved = $this->cache->store()->remember(
+        $store = $this->cache->store();
+
+        $resolved = $store->remember(
             // Hashed because the domain is attacker-chosen and unbounded: a 247-character
             // one clears `max:255` and `email:strict`, and Laravel's default cache store is
             // `database`, whose key column is a varchar(255) primary key.
             'email-integrity:host:' . hash('xxh128', $domain),
             $ttl,
-            fn (): ?bool => $this->resolve($domain),
+            fn (): ?bool => $store->has(self::RESOLVER_DOWN) ? null : $this->resolve($domain),
         );
 
         return $resolved ?? (bool)($host['fail_open'] ?? true);
@@ -125,6 +114,13 @@ class EmailIntegrity
 
         // "No such record" and "resolver unreachable" look identical from here, so probe
         // a name that must exist to tell them apart.
-        return @checkdnsrr('a.root-servers.net', 'A') ? false : null;
+        if (@checkdnsrr('a.root-servers.net', 'A')) {
+            return false;
+        }
+
+        // Remembered briefly: a resolver that times out would make every signup wait out all four lookups.
+        $this->cache->store()->put(self::RESOLVER_DOWN, true, 30);
+
+        return null;
     }
 }

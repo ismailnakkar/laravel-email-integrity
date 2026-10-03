@@ -60,30 +60,15 @@ final class EmailAddress
             return $domain;
         }
 
-        $ascii = @idn_to_ascii($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+        // Nontransitional, as Symfony Mime sends it: transitional folds `straße.de` onto `strasse.de`, another domain.
+        $ascii = @idn_to_ascii($domain, IDNA_DEFAULT | IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46);
 
         return is_string($ascii) && $ascii !== '' ? $ascii : $domain;
     }
 
     /**
-     * The one inbox an address actually reaches, so two spellings of it compare equal.
-     *
-     * Everything after `+` is a tag the provider strips, and Gmail also ignores dots in
-     * the local part — `j.anedoe@gmail.com` and `jane.doe@gmail.com` are one
-     * mailbox. Seen in the wild as five separately-paid accounts on one Gmail identity,
-     * distinguished only by where the dot sat.
-     *
-     * Dots are only collapsed for providers that genuinely ignore them. Elsewhere
-     * `a.b@` and `ab@` are different people, and merging them would deny a real signup.
-     * `-` is left alone for the same reason: it is qmail's default delimiter and an
-     * ordinary name character everywhere else, so folding `mary-jane@` onto `mary@` would
-     * refuse a real person. The `+` strip is that same bet at odds worth taking — every
-     * mass provider, Postfix and Exim all treat it as a tag.
-     *
-     * Null when there is no domain, and for a quoted local part, whose characters are
-     * literal — canonicalising it would change which mailbox it names. Null is not a safe
-     * value to STORE against a unique index, which accepts unlimited NULLs on both MySQL
-     * and Postgres, so a caller persisting this falls back to the address as typed.
+     * The one inbox an address reaches: `+` tags stripped, Gmail's dots dropped (README, "One mailbox, one account").
+     * Null without a domain or for a quoted local part, whose characters are literal.
      */
     public static function canonical(mixed $email): ?string
     {
@@ -93,12 +78,7 @@ final class EmailAddress
             return null;
         }
 
-        // strtolower() and NOT mb_strtolower() on the local part: U+212A KELVIN SIGN is the
-        // one codepoint mb_ folds into an ASCII letter (`k`), and `email:strict` accepts it.
-        // Folding it would canonicalise a stranger's jacK@gmail.com onto jack@gmail.com and
-        // hand them the unique-index slot. The domain is lowercased by domainOf().
-        $address = trim((string)$email);
-        $local = strtolower(mb_substr($address, 0, (int)mb_strrpos($address, '@')));
+        $local = self::local((string)$email);
 
         if ($local === '' || str_starts_with($local, '"')) {
             return null;
@@ -120,6 +100,36 @@ final class EmailAddress
         }
 
         return $local === '' ? null : $local . '@' . $domain;
+    }
+
+    /**
+     * The text inside a closing `<…>`, trimmed: providers echo the header, `Name <address>`. Only a closing one, since
+     * a bare address never ends in `>` but its quoted local part may hold `<victim@…>`.
+     */
+    public static function bare(string $address): string
+    {
+        return trim(preg_match('/<([^<>]+)>\s*$/', $address, $match) === 1 ? $match[1] : $address);
+    }
+
+    /**
+     * The mailbox exactly as it was addressed: bare, lowercased, the domain in punycode. Unlike canonical() it folds
+     * no tag and no dot, so it names this one spelling. Null without a local part or a usable domain.
+     */
+    public static function literal(string $address): ?string
+    {
+        $address = self::bare($address);
+        $domain = self::domainOf($address);
+        $local = self::local($address);
+
+        return $domain === null || $local === '' ? null : $local . '@' . $domain;
+    }
+
+    /** strtolower, not mb_: mb folds U+212A KELVIN SIGN onto `k`, handing a stranger's jac\u{212A}@ the owner's jack@. */
+    private static function local(string $address): string
+    {
+        $address = trim($address);
+
+        return strtolower(mb_substr($address, 0, (int)mb_strrpos($address, '@')));
     }
 
     /** True when `$domain` is the entry itself or a subdomain of it. */

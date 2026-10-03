@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Symfony\Component\Mailer\Bridge\Resend\Webhook\ResendRequestParser;
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -56,7 +58,6 @@ return [
         'cache' => [
             'enabled' => true,
             'store'   => null, // null = the default store
-            'key'     => 'email-integrity:disposable-domains',
             'ttl'     => 86400,
         ],
     ],
@@ -78,5 +79,30 @@ return [
         'enabled'   => env('EMAIL_INTEGRITY_HOST_CHECK', true),
         'fail_open' => true,
         'cache_ttl' => 3600,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Suppression
+    |--------------------------------------------------------------------------
+    |
+    | The addresses your mail provider reported as a complaint, a permanent bounce
+    | or its own block, never mailed again. Turn it on with a literal `true` in the
+    | published file, not an env switch a deploy can forget. The master switch
+    | above does not touch it: this list is yours, not a third party's.
+    |
+    | A block on one of `own_inboxes` (your contact or admin inbox) is reported as
+    | an error, so someone fixes it. Empty entries are skipped.
+    |
+    */
+    'suppression' => [
+        'enabled' => false,
+
+        'own_inboxes' => [],
+
+        'webhook' => [
+            'parser' => ResendRequestParser::class,
+            'secret' => env('RESEND_WEBHOOK_SECRET'),
+        ],
     ],
 ];

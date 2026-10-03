@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace EmailIntegrity\Tests;
 
 use EmailIntegrity\Casts\CanonicalEmail;
-use EmailIntegrity\EmailIntegrity;
+use EmailIntegrity\EmailAddress;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -52,7 +52,7 @@ class IdentityTest extends TestCase
         DB::table('users')->insert(['email' => 'ab@gmail.com']);
 
         $check = fn (string $typed): bool => Validator::make(
-            ['email' => app(EmailIntegrity::class)->canonical($typed) ?? $typed],
+            ['email' => EmailAddress::canonical($typed) ?? $typed],
             ['email' => 'unique:users,email'],
         )->passes();
 

@@ -14,6 +14,12 @@ abstract class TestCase extends BaseTestCase
         return [EmailIntegrityServiceProvider::class];
     }
 
+    protected function defineDatabaseMigrations(): void
+    {
+        // The publish-only stub, run here so the suite exercises the schema new apps get.
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+    }
+
     /** @param list<string> $domains */
     protected function withDisposableList(array $domains): string
     {
