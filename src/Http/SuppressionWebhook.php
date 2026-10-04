@@ -25,7 +25,7 @@ use Symfony\Component\Webhook\Exception\RejectWebhookException;
 
 /**
  * Reads the mail provider's events through its Symfony parser and suppresses the recipients of a complaint, a
- * permanent bounce or the provider's own block. Route it yourself, outside CSRF, behind a rate limiter.
+ * permanent bounce or the provider's own block. The package routes it, throttled and outside CSRF, at `suppression.webhook.path`; set that to null and route it yourself.
  */
 final class SuppressionWebhook
 {

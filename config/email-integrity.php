@@ -101,6 +101,12 @@ return [
         'own_inboxes' => [],
 
         'webhook' => [
+            // The URL the provider posts to; null registers no route (route it yourself with SuppressionWebhook).
+            'path' => 'email-integrity/webhook',
+
+            // The one host it answers on; null answers on any.
+            'domain' => null,
+
             'parser' => ResendRequestParser::class,
             'secret' => env('RESEND_WEBHOOK_SECRET'),
         ],

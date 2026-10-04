@@ -7,9 +7,12 @@ namespace EmailIntegrity;
 use Closure;
 use EmailIntegrity\Console\LiftSuppressionCommand;
 use EmailIntegrity\Console\UpdateDisposableDomainsCommand;
+use EmailIntegrity\Http\SuppressionWebhook;
 use EmailIntegrity\Listeners\DropSuppressedMail;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Factory as ValidationFactory;
 
@@ -39,6 +42,21 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         // Always listening and inert while suppression is off: the switch is read at send time. Package providers
         // boot before the app's, so this runs ahead of the app's own MessageSending listeners.
         Event::listen(MessageSending::class, DropSuppressedMail::class);
+
+        // Cached routes already hold it; only while suppression is on, as the controller refuses everything otherwise.
+        // The class, not the 'throttle' alias an app may remap. No middleware group: no session or CSRF, the provider signs the body.
+        $path = config('email-integrity.suppression.webhook.path');
+        $domain = config('email-integrity.suppression.webhook.domain');
+
+        if (config('email-integrity.suppression.enabled') === true && is_string($path) && trim($path, '/') !== '' && ! $this->app->routesAreCached()) {
+            $route = Route::post(trim($path, '/'), SuppressionWebhook::class)
+                ->middleware(ThrottleRequests::with(120, 1, 'email-integrity-webhook'))
+                ->name('email-integrity.webhook');
+
+            if (is_string($domain)) {
+                $route->domain($domain);
+            }
+        }
 
         if ($this->app->runningInConsole()) {
             $this->commands([UpdateDisposableDomainsCommand::class, LiftSuppressionCommand::class]);

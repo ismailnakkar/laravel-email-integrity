@@ -28,7 +28,7 @@ Left to your app:
 - Refresh the disposable list daily, and alert on failure.
 - `bail`, `max:255` and `email:strict` ahead of the rules (see [Use](#use)).
 - The unique index that makes one mailbox one account, with a binary collation on MySQL and MariaDB.
-- For suppression: the `suppressed_addresses` table, the webhook route (outside CSRF, rate limited), a provider
+- For suppression: the `suppressed_addresses` table, a provider
   endpoint subscribed to the right events only, `mail.from.address` on the provider's sending domain, and clearing the
   provider's own list when you lift an address.
 - One recipient per message wherever someone else typed a recipient: the provider's event names the message's whole To
@@ -66,6 +66,8 @@ A failed update exits non-zero and passes the exception to `report()`, so it rea
 | `host.fail_open`                | What an unreachable resolver means.                                                |
 | `suppression.enabled`           | Suppression on or off. Off by default.                                             |
 | `suppression.own_inboxes`       | Your contact or admin inboxes: a block on one is reported as an error.             |
+| `suppression.webhook.path`      | The URL the provider posts to. Null registers no route.                            |
+| `suppression.webhook.domain`    | The one host it answers on. Null answers on any.                                   |
 | `suppression.webhook.parser`    | The Symfony `RequestParserInterface` that reads your provider's events.            |
 | `suppression.webhook.secret`    | Its signing secret, `RESEND_WEBHOOK_SECRET` by default.                            |
 
@@ -123,15 +125,11 @@ An opt-in blocklist: a complaint, a permanent bounce or the provider's own block
 
 4. Put the provider's signing secret in `.env` (`RESEND_WEBHOOK_SECRET=whsec_…`).
 
-5. Route the webhook outside the `web` group, so it has no CSRF check and no session, behind a rate limiter:
+5. The package routes the webhook itself, at `suppression.webhook.path` (`email-integrity/webhook` by default), named
+   `email-integrity.webhook`. It has no session and no CSRF check, and is throttled to 120 a minute per IP. It exists
+   only while `suppression.enabled` is `true`. Set `path` to null to route `SuppressionWebhook` yourself.
 
-   ```php
-   use EmailIntegrity\Http\SuppressionWebhook;
-
-   Route::post('webhooks/mail', SuppressionWebhook::class)->middleware('throttle:60,1');
-   ```
-
-6. Point the provider at that URL. For Resend, subscribe the endpoint to `email.bounced`, `email.complained` and
+6. Point the provider at that URL (`https://your-app.example/email-integrity/webhook`). For Resend, subscribe the endpoint to `email.bounced`, `email.complained` and
    `email.suppressed` only: its `contact.*` and `suppression.*` events fail Symfony's payload check with a 406 that
    looks like a forgery, and Svix retries them until it disables the endpoint.
 
@@ -393,7 +391,7 @@ In your own tests:
   $body = json_encode($payload);
   $signature = base64_encode(hash_hmac('sha256', "{$id}.{$timestamp}.{$body}", $key, true)); // $key: base64-decoded secret
 
-  $this->call('POST', '/webhooks/mail', server: [
+  $this->call('POST', '/email-integrity/webhook', server: [
       'CONTENT_TYPE' => 'application/json',
       'HTTP_SVIX_ID' => $id,
       'HTTP_SVIX_TIMESTAMP' => (string) $timestamp, // within 300 seconds of now
@@ -402,6 +400,13 @@ In your own tests:
   ```
 
 Developing the package: `composer check` (Pint, then PHPUnit on SQLite in memory).
+
+## Upgrading from 1.1
+
+The package now registers the suppression webhook and its rate limit. Set `suppression.webhook.path` (and `domain`
+if needed) to the URL your app already uses, then delete your own route and rate limiter. The route name becomes
+`email-integrity.webhook`. Without a `path` change the route moves to `/email-integrity/webhook`, so repoint the
+provider.
 
 ## Upgrading from 1.0
 

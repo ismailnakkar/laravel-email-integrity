@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace EmailIntegrity\Tests;
 
-use EmailIntegrity\Http\SuppressionWebhook;
 use EmailIntegrity\SuppressedAddress;
 use EmailIntegrity\SuppressionReason;
 use EmailIntegrity\Tests\Fixtures\SingleRecipientParser;
@@ -29,11 +28,6 @@ class SuppressionWebhookTest extends TestCase
         $app['config']->set('mail.from.address', 'hello@example.com');
         $app['config']->set('email-integrity.suppression.enabled', true);
         $app['config']->set('email-integrity.suppression.webhook.secret', 'whsec_' . base64_encode(self::KEY));
-    }
-
-    protected function defineRoutes($router): void
-    {
-        $router->post('webhooks/mail', SuppressionWebhook::class);
     }
 
     public function test_a_complaint_blocks_every_spelling_of_the_inbox(): void
@@ -187,7 +181,7 @@ class SuppressionWebhookTest extends TestCase
             'email-integrity.suppression.webhook.secret' => 'whsec_' . str_repeat('!', 16),
         ]);
 
-        $this->call('POST', '/webhooks/mail', server: ['CONTENT_TYPE' => 'application/json'], content: '{"recipient": "victim@example.com"}')
+        $this->call('POST', '/email-integrity/webhook', server: ['CONTENT_TYPE' => 'application/json'], content: '{"recipient": "victim@example.com"}')
             ->assertUnauthorized();
     }
 
@@ -236,7 +230,7 @@ class SuppressionWebhookTest extends TestCase
             'email-integrity.suppression.webhook.secret' => 'plain-shared-secret-of-32-chars!',
         ]);
 
-        $this->call('POST', '/webhooks/mail', server: [
+        $this->call('POST', '/email-integrity/webhook', server: [
             'CONTENT_TYPE'  => 'application/json',
             'HTTP_X_SECRET' => 'plain-shared-secret-of-32-chars!',
         ], content: '{"recipient": "Jane <Jane.Doe@gmail.com>"}')->assertNoContent();
@@ -318,7 +312,7 @@ class SuppressionWebhookTest extends TestCase
         $timestamp = time() - $age;
         $signature = base64_encode(hash_hmac('sha256', "{$id}.{$timestamp}.{$body}", $key, true));
 
-        return $this->call('POST', '/webhooks/mail', server: ['CONTENT_TYPE' => 'application/json'] + ($signed ? [
+        return $this->call('POST', '/email-integrity/webhook', server: ['CONTENT_TYPE' => 'application/json'] + ($signed ? [
             'HTTP_SVIX_ID'        => $id,
             'HTTP_SVIX_TIMESTAMP' => (string)$timestamp,
             // Space-separated entries: a secret rotation puts two in flight.
