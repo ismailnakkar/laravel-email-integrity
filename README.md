@@ -403,10 +403,10 @@ Developing the package: `composer check` (Pint, then PHPUnit on SQLite in memory
 
 ## Upgrading from 1.1
 
-The package now registers the suppression webhook and its rate limit. Set `suppression.webhook.path` (and `domain`
-if needed) to the URL your app already uses, then delete your own route and rate limiter. The route name becomes
-`email-integrity.webhook`. Without a `path` change the route moves to `/email-integrity/webhook`, so repoint the
-provider.
+The package now registers the suppression webhook and its rate limit. A config published from 1.1 has no
+`suppression.webhook.path` (a published file's nested keys replace the package's), so no route is registered until you
+add `path`; keep your own route until then. Set `path` (and `domain` if needed) to the URL your app already uses, then
+delete your own route and rate limiter. The route name becomes `email-integrity.webhook`.
 
 ## Upgrading from 1.0
 
