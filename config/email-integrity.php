@@ -41,7 +41,12 @@ return [
     | result to `storage`. A failed fetch aborts before the write, so the
     | previous list stays in place rather than being replaced by an empty one.
     |
+    | `schedule` runs it daily at 03:00 on every server; false leaves scheduling
+    | to you. An app that also schedules it itself runs it twice.
+    |
     */
+    'schedule' => true,
+
     'disposable' => [
         'sources' => [
             'https://cdn.jsdelivr.net/gh/disposable/disposable-email-domains@master/domains.json',

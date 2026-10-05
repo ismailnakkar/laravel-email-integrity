@@ -25,6 +25,7 @@ abstract class TestCase extends BaseTestCase
     {
         $path = sys_get_temp_dir() . '/email-integrity-' . getmypid() . '.json';
         file_put_contents($path, json_encode($domains));
+        $this->beforeApplicationDestroyed(fn () => @unlink($path));
 
         config(['email-integrity.disposable.storage' => $path]);
         config(['email-integrity.disposable.cache.enabled' => false]);

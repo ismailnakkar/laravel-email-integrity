@@ -25,7 +25,7 @@ older one is a Composer conflict). Nothing is required while suppression is off.
 
 Left to your app:
 
-- Refresh the disposable list daily, and alert on failure.
+- Running Laravel's scheduler, and alerting on a failed update.
 - `bail`, `max:255` and `email:strict` ahead of the rules (see [Use](#use)).
 - The unique index that makes one mailbox one account, with a binary collation on MySQL and MariaDB.
 - For suppression: the `suppressed_addresses` table, a provider
@@ -44,21 +44,18 @@ php artisan vendor:publish --tag=email-integrity-config
 php artisan email-integrity:update
 ```
 
-Upstream publishes daily, so refresh daily — and alert on failure, because a list that silently stops updating is a
-list that silently stops working:
+Upstream publishes daily, so the package schedules `email-integrity:update` daily at 03:00, on every server: each keeps
+its own list file. Set `schedule` to `false` to schedule it yourself, by name.
 
-```php
-Schedule::command('email-integrity:update')->dailyAt('03:00');
-```
-
-A failed update exits non-zero and passes the exception to `report()`, so it reaches your exception handler with no
-`onFailure` hook.
+Alert on failure, because a list that silently stops updating is a list that silently stops working. A failed update
+exits non-zero and passes the exception to `report()`, so it reaches your exception handler with no `onFailure` hook.
 
 ## Setup
 
 | Key                             | Purpose                                                                           |
 |---------------------------------|-----------------------------------------------------------------------------------|
 | `enabled`                       | Master switch. Off leaves both domain rules inert, so a bad list needs no deploy.  |
+| `schedule`                      | Schedules `email-integrity:update` daily at 03:00. False leaves it to you.         |
 | `allow`                         | Wins over everything, including the fetched list.                                  |
 | `deny`                          | Your own additions, for lookalikes the lists have not caught yet (`gmail2.gq`).    |
 | `disposable.sources`            | The lists to merge.                                                                |
@@ -192,6 +189,7 @@ use EmailIntegrity\EmailIntegrity;
 
 app(EmailIntegrity::class)->isDisposable($address);
 app(EmailIntegrity::class)->hostResolves($address);
+EmailAddress::sendable($address); // false where a send to this bare address would throw
 EmailAddress::canonical($address);
 ```
 
@@ -332,6 +330,14 @@ punycode domain) are the address rules the keys are built from.
 - The list is loaded once per request or queued job and cached — O(1) membership, so 75k entries cost nothing per
   address, and a long-running worker sees the next update.
 - A DNS verdict is cached only when the resolver answered; "could not tell" is never stored.
+- A mail notification routed to any address the send would throw on (an imported row without its `@`, a line break) is
+  skipped instead of throwing mid-send, and logged at info as `Mail not sent: the address cannot receive mail.` with
+  `email` and `notification`. Only its mail channel, named `'mail'` or `MailChannel::class`: the others still send. It
+  reads the route as the mail channel does (one address or a list, either of which may be `Name <address>`, or a bare
+  address => name map), has no switch, and otherwise answers null, so your own `NotificationSending` listeners still
+  run. A mailable sent with `Mail::to()` builds its addresses before any event; ask `EmailAddress::sendable()` first.
+- A notification whose `toMail()` returns a mailable is judged on the notifiable's route, not on the mailable's own
+  recipients, so route such a notification a valid address or none.
 
 Suppression:
 
@@ -379,11 +385,10 @@ Suppression:
 - Off, `blocking()` answers null before touching the table, so the guard, `NotSuppressed` and your own checks all
   pass.
 
-## Testing
+## Testing your app
 
-In your own tests:
-
-- `Mail::fake()` never fires `MessageSending`, so test the guard by sending on the `array` mailer.
+- `Mail::fake()` never fires `MessageSending`, and `Notification::fake()` never fires `NotificationSending`, so test
+  both guards by sending on the `array` mailer.
 - Build rows with `SuppressedAddress::suppress()`.
 - Sign a Resend event the way Svix does:
 
@@ -399,16 +404,25 @@ In your own tests:
   ], content: $body);
   ```
 
-Developing the package: `composer check` (Pint, then PHPUnit on SQLite in memory).
+## Upgrading
 
-## Upgrading from 1.1
+### From 1.2
+
+The package now schedules `email-integrity:update` daily at 03:00. Delete your own `Schedule::command(...)` entry, or the
+list is fetched twice a day; to keep your own time instead, set `schedule` to `false` in the published config.
+
+A mail notification to an address the send would throw on is now skipped and logged instead of throwing
+`RfcComplianceException` (or Laravel's `InvalidArgumentException` on a line break); nothing to change. Your own check before such a send can go, or become
+`EmailAddress::sendable()` where you still need the answer.
+
+### From 1.1
 
 The package now registers the suppression webhook and its rate limit. A config published from 1.1 has no
 `suppression.webhook.path` (a published file's nested keys replace the package's), so no route is registered until you
 add `path`; keep your own route until then. Set `path` (and `domain` if needed) to the URL your app already uses, then
 delete your own route and rate limiter. The route name becomes `email-integrity.webhook`.
 
-## Upgrading from 1.0
+### From 1.0
 
 No API breaks, and suppression stays off until you turn it on. Stored canonical values for some domains change:
 
@@ -423,6 +437,10 @@ No API breaks, and suppression stays off until you turn it on. Stored canonical 
 - **The `symfony/resend-mailer` conflict applies even with suppression off.** The package now conflicts with
   `<7.4.18 || >=8.0,<8.1.6`, so an app that sends through Resend on an older bridge must raise it, or Composer refuses 1.1.
 - **`UpdateDisposableDomainsCommand` is `@internal`.** Schedule it by name, `'email-integrity:update'`, not by class.
+
+## Development
+
+`composer check` runs Pint (`--test`), then PHPUnit on SQLite in memory.
 
 ## Licence
 

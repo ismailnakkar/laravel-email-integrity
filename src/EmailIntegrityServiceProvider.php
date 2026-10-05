@@ -9,7 +9,10 @@ use EmailIntegrity\Console\LiftSuppressionCommand;
 use EmailIntegrity\Console\UpdateDisposableDomainsCommand;
 use EmailIntegrity\Http\SuppressionWebhook;
 use EmailIntegrity\Listeners\DropSuppressedMail;
+use EmailIntegrity\Listeners\SkipUnsendableMail;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Notifications\Events\NotificationSending;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
@@ -43,6 +46,9 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         // boot before the app's, so this runs ahead of the app's own MessageSending listeners.
         Event::listen(MessageSending::class, DropSuppressedMail::class);
 
+        // No switch: a notification to an address Symfony Mime cannot build would only throw.
+        Event::listen(NotificationSending::class, SkipUnsendableMail::class);
+
         // Cached routes already hold it; only while suppression is on, as the controller refuses everything otherwise.
         // The class, not the 'throttle' alias an app may remap. No middleware group: no session or CSRF, the provider signs the body.
         $path = config('email-integrity.suppression.webhook.path');
@@ -60,6 +66,14 @@ class EmailIntegrityServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([UpdateDisposableDomainsCommand::class, LiftSuppressionCommand::class]);
+
+            // Read when the scheduler resolves, so config set after boot still decides. Every server refreshes its own
+            // list file, so neither onOneServer() nor withoutOverlapping(): both take one lock in the shared cache.
+            $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+                if (config('email-integrity.schedule')) {
+                    $schedule->command('email-integrity:update')->dailyAt('03:00');
+                }
+            });
 
             $this->publishes([
                 __DIR__ . '/../config/email-integrity.php' => config_path('email-integrity.php'),

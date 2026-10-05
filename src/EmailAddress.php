@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace EmailIntegrity;
 
+use InvalidArgumentException;
+use Symfony\Component\Mime\Address;
+
 /**
  * Domain extraction, kept in one place because getting it wrong is silent.
  *
@@ -130,6 +133,26 @@ final class EmailAddress
         $address = trim($address);
 
         return strtolower(mb_substr($address, 0, (int)mb_strrpos($address, '@')));
+    }
+
+    /**
+     * True when a message can be addressed to it: Symfony Mime's own Address, which the send would otherwise throw on
+     * (an imported row may lack its `@`). A bare address, not `Name <…>`. Laravel refuses a line break, which Symfony
+     * would trim off the end.
+     */
+    public static function sendable(mixed $email): bool
+    {
+        if (! is_string($email) || strpbrk($email, "\r\n") !== false) {
+            return false;
+        }
+
+        try {
+            new Address($email);
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+
+        return true;
     }
 
     /** True when `$domain` is the entry itself or a subdomain of it. */
