@@ -10,6 +10,7 @@ use EmailIntegrity\SuppressionReason;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use LogicException;
@@ -35,7 +36,7 @@ final class SuppressionWebhook
         $secret = $this->secret($parser);
 
         if ($secret === null) {
-            Log::warning('Mail provider webhook refused: the signing secret is missing or too short.');
+            $this->warnOnce('Mail provider webhook refused: the signing secret is missing or too short.');
 
             return response()->noContent(Response::HTTP_UNAUTHORIZED);
         }
@@ -58,7 +59,7 @@ final class SuppressionWebhook
             }
 
             // Laravel never reports an HttpException, so a rotated secret would otherwise fail without a trace.
-            Log::warning('Mail provider webhook refused.', ['status' => $e->getStatusCode(), 'reason' => $e->getMessage()]);
+            $this->warnOnce('Mail provider webhook refused.', ['status' => $e->getStatusCode(), 'reason' => $e->getMessage()]);
 
             throw $e;
         }
@@ -68,6 +69,27 @@ final class SuppressionWebhook
         }
 
         return response()->noContent();
+    }
+
+    /**
+     * Logged at most once per message and context every five minutes: anyone can post to the webhook URL, and each
+     * warning may be an event in the app's error tracker.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function warnOnce(string $message, array $context = []): void
+    {
+        // Fails open, unreported: a cache that throws or keeps nothing (memcached while down, the null store: add()
+        // answers false without throwing) logs every one.
+        $first = rescue(function () use ($message, $context): bool {
+            $key = 'email-integrity:webhook-warning:' . hash('xxh128', serialize([$message, $context]));
+
+            return Cache::add($key, true, 300) || ! Cache::has($key);
+        }, rescue: true, report: false);
+
+        if ($first) {
+            Log::warning($message, $context);
+        }
     }
 
     private function parser(): RequestParserInterface

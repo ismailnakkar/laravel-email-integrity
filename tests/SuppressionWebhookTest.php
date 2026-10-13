@@ -170,7 +170,54 @@ class SuppressionWebhookTest extends TestCase
             ->assertUnauthorized();
 
         $this->assertSame(0, SuppressedAddress::query()->count());
-        Log::shouldHaveReceived('warning')->with('Mail provider webhook refused: the signing secret is missing or too short.');
+        Log::shouldHaveReceived('warning')->with('Mail provider webhook refused: the signing secret is missing or too short.', []);
+    }
+
+    /** Anyone can post to the URL, and each warning may be an event in the app's error tracker. */
+    public function test_a_repeated_refusal_is_logged_once_every_five_minutes(): void
+    {
+        Log::spy();
+        $forged = fn (): TestResponse => $this->deliver($this->event('email.complained', ['victim@example.com']), 'the-wrong-key-entirely-for-svix!');
+        $warned = fn (string $reason) => Log::shouldHaveReceived('warning')->with('Mail provider webhook refused.', ['status' => 406, 'reason' => $reason]);
+
+        $forged()->assertStatus(406);
+        $forged()->assertStatus(406);
+        $warned('No signatures found matching the expected signature.')->once();
+
+        $this->deliver($this->event('email.complained', ['victim@example.com']), age: 301)->assertStatus(406);
+        $warned('Timestamp is outside the allowed time window.')->once();
+
+        $this->travel(301)->seconds();
+        $forged()->assertStatus(406);
+        $warned('No signatures found matching the expected signature.')->twice();
+    }
+
+    public function test_a_weak_secret_is_logged_once_every_five_minutes(): void
+    {
+        Log::spy();
+        config(['email-integrity.suppression.webhook.secret' => null]);
+        $refused = fn (): TestResponse => $this->deliver($this->event('email.complained', ['victim@example.com']))->assertUnauthorized();
+        $warned = fn () => Log::shouldHaveReceived('warning')->with('Mail provider webhook refused: the signing secret is missing or too short.', []);
+
+        $refused();
+        $refused();
+        $warned()->once();
+
+        $this->travel(301)->seconds();
+        $refused();
+        $warned()->twice();
+    }
+
+    /** The null store's add() answers false as if the key were taken, which would silence every refusal for good. */
+    public function test_a_cache_that_keeps_nothing_logs_every_refusal(): void
+    {
+        Log::spy();
+        config(['cache.default' => 'null']);
+        $forged = fn (): TestResponse => $this->deliver($this->event('email.complained', ['victim@example.com']), 'the-wrong-key-entirely-for-svix!');
+
+        $forged()->assertStatus(406);
+        $forged()->assertStatus(406);
+        Log::shouldHaveReceived('warning')->with('Mail provider webhook refused.', ['status' => 406, 'reason' => 'No signatures found matching the expected signature.'])->twice();
     }
 
     /** A wrapper around Resend's final parser still gets its `whsec_` secret decoded strictly. */

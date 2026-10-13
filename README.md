@@ -364,7 +364,8 @@ Suppression:
 - A signed event type the parser does not model is answered 204, so the provider does not retry it. A signed Resend
   bounce, complaint or block the parser cannot read (Symfony's `Invalid date`) is passed to `report()` and refused, so
   the provider retries it once the parser is fixed. Any other refusal keeps the parser's own status (406), which the
-  provider retries. Each refusal, the 401 included, logs a warning, since Laravel never reports the 406.
+  provider retries. Each refusal, the 401 included, logs a warning (Laravel never reports the 406), at most once per
+  reason every five minutes, since anyone can post to the URL.
 - Misconfiguration is checked when the webhook runs, never at boot, so `artisan` and CI keep working: it throws a
   `LogicException` naming the `composer require` to run when `symfony/webhook` or the configured parser is missing or
   is not a `RequestParserInterface`, when `suppression.enabled` is off, and when an event names a sender while
@@ -405,6 +406,10 @@ Suppression:
   ```
 
 ## Upgrading
+
+### From 1.3
+
+Nothing to change. Webhook refusal warnings now log at most once per reason every five minutes.
 
 ### From 1.2
 
