@@ -45,7 +45,8 @@ php artisan email-integrity:update
 ```
 
 Upstream publishes daily, so the package schedules `email-integrity:update` daily at 03:00, on every server: each keeps
-its own list file. Set `schedule` to `false` to schedule it yourself, by name.
+its own list file. Do not schedule it again, or it runs twice; to retime it, set `schedule` to `false` and schedule it
+yourself, by name.
 
 Alert on failure, because a list that silently stops updating is a list that silently stops working. A failed update
 exits non-zero and passes the exception to `report()`, so it reaches your exception handler with no `onFailure` hook.
@@ -67,6 +68,8 @@ exits non-zero and passes the exception to `report()`, so it reaches your except
 | `suppression.webhook.domain`    | The one host it answers on. Null answers on any.                                   |
 | `suppression.webhook.parser`    | The Symfony `RequestParserInterface` that reads your provider's events.            |
 | `suppression.webhook.secret`    | Its signing secret, `RESEND_WEBHOOK_SECRET` by default.                            |
+
+A key the published file leaves out keeps its default, inside a group too. A list you set replaces the default whole.
 
 `allow` and `deny` cover the domain **and every subdomain**. The fetched list is matched exactly, so a provider with a
 wildcard MX (`anything.mailinator.com` is a live inbox) is a one-line `deny` entry. The master switch does not touch
@@ -407,6 +410,13 @@ Suppression:
 
 ## Upgrading
 
+### From 1.4
+
+Nothing to change. Since 1.4.2 a published `disposable`, `host` or `suppression` group keeps the defaults of the keys it
+leaves out, instead of dropping them; a list you set still replaces the default whole. So a config published from 1.1
+now gets the default `suppression.webhook.path`: while suppression is on, the package routes `email-integrity/webhook`
+beside your own route. Set `path` to your URL (see [From 1.1](#from-11)), or to `null` to keep only your own route.
+
 ### From 1.3
 
 Nothing to change. Webhook refusal warnings now log at most once per reason every five minutes.
@@ -423,9 +433,9 @@ A mail notification to an address the send would throw on is now skipped and log
 ### From 1.1
 
 The package now registers the suppression webhook and its rate limit. A config published from 1.1 has no
-`suppression.webhook.path` (a published file's nested keys replace the package's), so no route is registered until you
-add `path`; keep your own route until then. Set `path` (and `domain` if needed) to the URL your app already uses, then
-delete your own route and rate limiter. The route name becomes `email-integrity.webhook`.
+`suppression.webhook.path`, so it gets the default, `email-integrity/webhook`, beside your own route (before 1.4.2, no
+route until you added `path`). Set `path` (and `domain` if needed) to the URL your app already uses, then delete your
+own route and rate limiter. The route name becomes `email-integrity.webhook`.
 
 ### From 1.0
 

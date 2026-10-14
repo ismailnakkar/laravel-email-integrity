@@ -11,6 +11,7 @@ use EmailIntegrity\Http\SuppressionWebhook;
 use EmailIntegrity\Listeners\DropSuppressedMail;
 use EmailIntegrity\Listeners\SkipUnsendableMail;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Mail\Events\MessageSending;
 use Illuminate\Notifications\Events\NotificationSending;
 use Illuminate\Routing\Middleware\ThrottleRequests;
@@ -23,7 +24,12 @@ class EmailIntegrityServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/email-integrity.php', 'email-integrity');
+        // Not mergeConfigFrom(): a published group would drop the defaults it leaves out. Nor replaceConfigRecursivelyFrom():
+        // it merges lists by index, so an empty `disposable.sources` would keep the default source.
+        if (! ($this->app instanceof CachesConfiguration && $this->app->configurationIsCached())) {
+            $config = $this->app->make('config');
+            $config->set('email-integrity', self::merge(require __DIR__ . '/../config/email-integrity.php', (array)$config->get('email-integrity', [])));
+        }
 
         // Scoped: the 74k-entry list loads once per request or job, and a queue worker or Octane sees the next update.
         $this->app->scoped(DisposableDomains::class);
@@ -84,6 +90,26 @@ class EmailIntegrityServiceProvider extends ServiceProvider
                 __DIR__ . '/../database/migrations' => database_path('migrations'),
             ], 'email-integrity-migrations');
         }
+    }
+
+    /**
+     * The app's values over the defaults: a group merges key by key, anything else (a list included) replaces.
+     *
+     * @param  array<array-key, mixed>  $defaults
+     * @param  array<array-key, mixed>  $values
+     * @return array<array-key, mixed>
+     */
+    private static function merge(array $defaults, array $values): array
+    {
+        foreach ($values as $key => $value) {
+            $default = $defaults[$key] ?? null;
+
+            $defaults[$key] = is_array($value) && is_array($default) && ! array_is_list($default)
+                ? self::merge($default, $value)
+                : $value;
+        }
+
+        return $defaults;
     }
 
     /** The message is set mid-validation: extend()'s own is never translated, and boot() runs before the locale is set. */
