@@ -445,7 +445,7 @@ No API breaks, and suppression stays off until you turn it on. Stored canonical 
 
 ## Development
 
-`composer check` runs Pint (`--test`), then PHPUnit on SQLite in memory.
+`composer check` runs Pint (`--test`), PHPStan, then PHPUnit on SQLite in memory.
 
 ## Licence
 

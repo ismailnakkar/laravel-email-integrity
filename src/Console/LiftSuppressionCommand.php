@@ -16,7 +16,8 @@ class LiftSuppressionCommand extends Command
 
     public function handle(): int
     {
-        $address = (string)$this->argument('address');
+        /** @var string $address Required by the signature. */
+        $address = $this->argument('address');
 
         $this->components->info(sprintf('Lifted %d suppression row(s) for %s.', SuppressedAddress::lift($address), $address));
         // Otherwise the next send comes back as the provider's own block and suppresses the address again.

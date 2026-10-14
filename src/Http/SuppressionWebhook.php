@@ -135,7 +135,7 @@ final class SuppressionWebhook
     {
         $reason = $this->reason($event);
 
-        if ($reason === null) {
+        if ($reason === null || ! $event instanceof AbstractMailerEvent) {
             return;
         }
 
@@ -158,7 +158,6 @@ final class SuppressionWebhook
 
         $to = Arr::get($event->getPayload(), 'data.to');
 
-        /** @var AbstractMailerEvent $event reason() is null for anything else. */
         foreach (is_array($to) && array_is_list($to) ? $to : [$event->getRecipientEmail()] as $recipient) {
             if (is_string($recipient)) {
                 SuppressedAddress::suppress($recipient, $reason);
