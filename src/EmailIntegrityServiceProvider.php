@@ -28,7 +28,14 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         // it merges lists by index, so an empty `disposable.sources` would keep the default source.
         if (! ($this->app instanceof CachesConfiguration && $this->app->configurationIsCached())) {
             $config = $this->app->make('config');
-            $config->set('email-integrity', self::merge(require __DIR__ . '/../config/email-integrity.php', (array)$config->get('email-integrity', [])));
+            $published = (array)$config->get('email-integrity', []);
+
+            // As through 1.4.1: a `webhook` group published without `path` (from 1.1) registers no route beside the app's own.
+            if (is_array($published['suppression']['webhook'] ?? null) && ! array_key_exists('path', $published['suppression']['webhook'])) {
+                $published['suppression']['webhook']['path'] = null;
+            }
+
+            $config->set('email-integrity', self::merge(require __DIR__ . '/../config/email-integrity.php', $published));
         }
 
         // Scoped: the 74k-entry list loads once per request or job, and a queue worker or Octane sees the next update.
@@ -52,7 +59,7 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         // boot before the app's, so this runs ahead of the app's own MessageSending listeners.
         Event::listen(MessageSending::class, DropSuppressedMail::class);
 
-        // No switch: a notification to an address Symfony Mime cannot build would only throw.
+        // Always listening; `skip_unsendable` is read at send time.
         Event::listen(NotificationSending::class, SkipUnsendableMail::class);
 
         // Cached routes already hold it; only while suppression is on, as the controller refuses everything otherwise.

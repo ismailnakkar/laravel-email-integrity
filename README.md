@@ -57,6 +57,7 @@ exits non-zero and passes the exception to `report()`, so it reaches your except
 |---------------------------------|-----------------------------------------------------------------------------------|
 | `enabled`                       | Master switch. Off leaves both domain rules inert, so a bad list needs no deploy.  |
 | `schedule`                      | Schedules `email-integrity:update` daily at 03:00. False leaves it to you.         |
+| `skip_unsendable`               | Skips a mail notification the send would throw on. False lets it throw.            |
 | `allow`                         | Wins over everything, including the fetched list.                                  |
 | `deny`                          | Your own additions, for lookalikes the lists have not caught yet (`gmail2.gq`).    |
 | `disposable.sources`            | The lists to merge.                                                                |
@@ -69,7 +70,8 @@ exits non-zero and passes the exception to `report()`, so it reaches your except
 | `suppression.webhook.parser`    | The Symfony `RequestParserInterface` that reads your provider's events.            |
 | `suppression.webhook.secret`    | Its signing secret, `RESEND_WEBHOOK_SECRET` by default.                            |
 
-A key the published file leaves out keeps its default, inside a group too. A list you set replaces the default whole.
+A key the published file leaves out keeps its default, inside a group too; only a published `suppression.webhook` group
+without `path` gets none, so no route. A list you set replaces the default whole.
 
 `allow` and `deny` cover the domain **and every subdomain**. The fetched list is matched exactly, so a provider with a
 wildcard MX (`anything.mailinator.com` is a live inbox) is a one-line `deny` entry. The master switch does not touch
@@ -309,6 +311,9 @@ SuppressedAddress::suppress($address, SuppressionReason::complained); // true fo
 SuppressedAddress::lift($address);                                    // the rows deleted
 ```
 
+A notification to an address `EmailAddress::sendable()` refuses is skipped too, so ask both:
+`EmailAddress::sendable($address) && SuppressedAddress::blocking($address) === null`.
+
 To unblock an address:
 
 ```bash
@@ -337,8 +342,9 @@ punycode domain) are the address rules the keys are built from.
   skipped instead of throwing mid-send, and logged at info as `Mail not sent: the address cannot receive mail.` with
   `email` and `notification`. Only its mail channel, named `'mail'` or `MailChannel::class`: the others still send. It
   reads the route as the mail channel does (one address or a list, either of which may be `Name <address>`, or a bare
-  address => name map), has no switch, and otherwise answers null, so your own `NotificationSending` listeners still
-  run. A mailable sent with `Mail::to()` builds its addresses before any event; ask `EmailAddress::sendable()` first.
+  address => name map), and otherwise answers null, so your own `NotificationSending` listeners still run. Set
+  `skip_unsendable` to `false` to let such a send throw instead. A mailable sent with `Mail::to()` builds its addresses
+  before any event; ask `EmailAddress::sendable()` first.
 - A notification whose `toMail()` returns a mailable is judged on the notifiable's route, not on the mailable's own
   recipients, so route such a notification a valid address or none.
 
@@ -412,10 +418,12 @@ Suppression:
 
 ### From 1.4
 
-Nothing to change. Since 1.4.2 a published `disposable`, `host` or `suppression` group keeps the defaults of the keys it
-leaves out, instead of dropping them; a list you set still replaces the default whole. So a config published from 1.1
-now gets the default `suppression.webhook.path`: while suppression is on, the package routes `email-integrity/webhook`
-beside your own route. Set `path` to your URL (see [From 1.1](#from-11)), or to `null` to keep only your own route.
+1.5 adds `skip_unsendable`; a config published before it has none and keeps the skip.
+
+Since 1.4.2 a published `disposable`, `host` or `suppression` group keeps the defaults of the keys it leaves out, instead
+of dropping them; a list you set still replaces the default whole. The exception: a `suppression.webhook` group without
+`path`, as published from 1.1, registers no route, as through 1.4.1. Only 1.4.2 routed `email-integrity/webhook` for it,
+beside your own route; if your provider posts there, set `path` to it.
 
 ### From 1.3
 
@@ -433,9 +441,9 @@ A mail notification to an address the send would throw on is now skipped and log
 ### From 1.1
 
 The package now registers the suppression webhook and its rate limit. A config published from 1.1 has no
-`suppression.webhook.path`, so it gets the default, `email-integrity/webhook`, beside your own route (before 1.4.2, no
-route until you added `path`). Set `path` (and `domain` if needed) to the URL your app already uses, then delete your
-own route and rate limiter. The route name becomes `email-integrity.webhook`.
+`suppression.webhook.path`, so no route is registered until you add `path`; keep your own route until then. Set `path`
+(and `domain` if needed) to the URL your app already uses, then delete your own route and rate limiter. The route name
+becomes `email-integrity.webhook`.
 
 ### From 1.0
 

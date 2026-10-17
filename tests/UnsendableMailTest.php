@@ -11,9 +11,11 @@ use Illuminate\Notifications\Events\NotificationSending;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Notifications\Notification as BaseNotification;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
+use Symfony\Component\Mime\Exception\RfcComplianceException;
 
 /** Symfony Mime throws mid-send on an address it cannot build, such as an imported one without its `@`. */
 class UnsendableMailTest extends TestCase
@@ -129,6 +131,26 @@ class UnsendableMailTest extends TestCase
 
         $this->assertSame(0, $this->sent());
         $this->assertSame(2, $this->spy->received);
+    }
+
+    /** Read at send time, so config set after boot decides. */
+    public function test_skip_unsendable_false_lets_the_send_throw(): void
+    {
+        config(['email-integrity.skip_unsendable' => false]);
+        $this->expectException(RfcComplianceException::class);
+        Notification::route('mail', 'not-an-address')->notify($this->notification());
+    }
+
+    /** A config cached before 1.5 has no key, and register() merges no default into a cached config. */
+    public function test_skip_unsendable_missing_keeps_the_skip(): void
+    {
+        // Not offsetUnset(): it sets null, which the fallback would not cover.
+        config(['email-integrity' => Arr::except(config('email-integrity'), 'skip_unsendable')]);
+
+        Notification::route('mail', 'not-an-address')->notify($this->notification());
+
+        $this->assertSame(0, $this->sent());
+        $this->assertSame(1, $this->spy->received);
     }
 
     public function test_the_mail_channel_named_by_its_class_is_guarded_too(): void

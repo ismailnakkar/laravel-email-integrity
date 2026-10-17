@@ -23,6 +23,11 @@ final class SkipUnsendableMail
     // Null, not true, when it sends: any non-null answer stops the app's own NotificationSending listeners.
     public function handle(NotificationSending $event): ?bool
     {
+        // Missing from a config cached before 1.5 means on, as it was.
+        if (! config('email-integrity.skip_unsendable', true)) {
+            return null;
+        }
+
         // via() may name the channel by its class, which the ChannelManager resolves as well.
         if ($event->channel !== 'mail' && $event->channel !== MailChannel::class) {
             return null;

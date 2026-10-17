@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EmailIntegrity\Tests;
 
 use EmailIntegrity\EmailIntegrityServiceProvider;
+use Symfony\Component\Mailer\Bridge\Resend\Webhook\ResendRequestParser;
 
 /** An app's published file is loaded before the provider registers, so each test sets it and registers again. */
 class ConfigTest extends TestCase
@@ -33,7 +34,17 @@ class ConfigTest extends TestCase
         $this->assertTrue(config('email-integrity.suppression.enabled'));
         $this->assertSame([], config('email-integrity.suppression.own_inboxes'));
         $this->assertSame('whsec_x', config('email-integrity.suppression.webhook.secret'));
+        $this->assertSame(ResendRequestParser::class, config('email-integrity.suppression.webhook.parser'));
+        // As through 1.4.1: a 1.1 app routes the webhook itself, so its group gains no default path.
+        $this->assertNull(config('email-integrity.suppression.webhook.path'));
+    }
+
+    public function test_a_key_or_group_left_out_keeps_its_default(): void
+    {
+        $this->publish(['schedule' => false]);
+
         $this->assertSame('email-integrity/webhook', config('email-integrity.suppression.webhook.path'));
+        $this->assertTrue(config('email-integrity.skip_unsendable'));
     }
 
     public function test_a_published_list_replaces_the_default_list(): void

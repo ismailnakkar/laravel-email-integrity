@@ -88,6 +88,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Unsendable addresses
+    |--------------------------------------------------------------------------
+    |
+    | A mail notification routed to an address Symfony Mime cannot build (an
+    | imported row without its `@`, a line break) is skipped and logged at info
+    | instead of throwing mid-send. False lets the send throw.
+    |
+    */
+    'skip_unsendable' => true,
+
+    /*
+    |--------------------------------------------------------------------------
     | Suppression
     |--------------------------------------------------------------------------
     |
@@ -106,7 +118,8 @@ return [
         'own_inboxes' => [],
 
         'webhook' => [
-            // The URL the provider posts to; null registers no route (route it yourself with SuppressionWebhook).
+            // The URL the provider posts to; null, or left out of a published `webhook` group, registers no route
+            // (route it yourself with SuppressionWebhook).
             'path' => 'email-integrity/webhook',
 
             // The one host it answers on; null answers on any.
