@@ -152,8 +152,9 @@ public function rules(): array
 }
 ```
 
-`not_disposable`, `routable_domain` and `not_suppressed` are registered for you — no import, no `app()` — and carry the
-package's messages in the app's current locale.
+`not_disposable`, `routable_domain`, `not_suppressed` and `unclaimed_mailbox` are registered for you — no import, no
+`app()`. The first three carry the package's messages in the app's current locale; `unclaimed_mailbox` (see
+[One mailbox, one account](#one-mailbox-one-account)) fails with your app's `validation.unique`.
 
 Every part of that order is load-bearing:
 
@@ -177,8 +178,13 @@ message lookup.
 use EmailIntegrity\Rules\NotDisposable;
 use EmailIntegrity\Rules\NotSuppressed;
 use EmailIntegrity\Rules\RoutableDomain;
+use EmailIntegrity\Rules\UnclaimedMailbox;
 
 'email' => ['bail', 'required', 'max:255', 'email:strict', 'unique:users',
+    app(NotDisposable::class), app(NotSuppressed::class), app(RoutableDomain::class)],
+
+// Keeping the address as typed: in place of 'unique:users' (->ignore($user) on a form that updates $user)
+'email' => ['bail', 'required', 'max:255', 'email:strict', new UnclaimedMailbox('users'),
     app(NotDisposable::class), app(NotSuppressed::class), app(RoutableDomain::class)],
 ```
 
@@ -231,7 +237,8 @@ reset too.
 Delivery is identical on every provider that treats `+` as a tag, but the user's tag is gone.
 
 **To keep the address as typed**, add a nullable unique `email_canonical` column and let the cast fill it, then
-validate `unique:users,email_canonical`:
+validate with `unclaimed_mailbox:users` (since 1.6) in place of `unique:users`, and on a form that updates an account
+with `(new UnclaimedMailbox('users'))->ignore($user)` in place of `Rule::unique('users')->ignore($user)`:
 
 ```php
 use EmailIntegrity\Casts\CanonicalEmail;
@@ -241,6 +248,13 @@ protected function casts(): array
     return ['email' => CanonicalEmail::class];
 }
 ```
+
+Core `unique` compares the address as typed, so an alias spelling passes it and the unique index then throws.
+`unclaimed_mailbox:{table},{canonical_column},{email_column},{ignore_id}` (defaults `email_canonical`, `email`, none),
+or `new UnclaimedMailbox($table, $canonical, $email)`, refuses an address whose canonical form a row holds. A row whose
+canonical column is NULL still holds its exact address, compared byte for byte. `{ignore_id}` and
+`->ignore($id, $idColumn)` skip that row, as core's do. It fails with your app's `validation.unique` message. For
+example: `'bail|required|max:255|email:strict|unclaimed_mailbox:users|not_disposable|routable_domain'`.
 
 A cast, not a `saving` hook: `saveQuietly()` fires no events, and a null left there is a row the unique index will not
 police. `CanonicalEmail::class . ':identity'` renames the column.
@@ -262,6 +276,9 @@ foreach (User::lazyById() as $user) {
 select email_canonical, count(*) from users group by email_canonical having count(*) > 1;
 ```
 
+To keep both rows of a collision, leave the later row's `email_canonical` NULL; `unclaimed_mailbox` still refuses its
+exact address.
+
 #### Collation
 
 On MySQL and MariaDB the column the unique index sits on needs a binary collation. Their defaults
@@ -282,7 +299,14 @@ alone. PostgreSQL and SQLite compare exactly by default.
 
 In both modes, look the account up at sign-in and password reset by the binary column, not by `email`:
 `where email_canonical = EmailAddress::canonical($typed) ?? $typed`. Under a case-insensitive `email`, a lookup by
-`email` can return a lookalike's row.
+`email` can return a lookalike's row. Keeping the address as typed, check first for a row whose `email_canonical` is
+NULL and that holds the exact address, compared byte for byte, then for the canonical match:
+
+```php
+$user = User::whereNull('email_canonical')->where('email', $typed)->get()
+    ->first(fn (User $row) => $row->email === $typed)
+    ?? User::where('email_canonical', EmailAddress::canonical($typed) ?? $typed)->first();
+```
 
 What it will and will not merge:
 
@@ -311,8 +335,9 @@ SuppressedAddress::suppress($address, SuppressionReason::complained); // true fo
 SuppressedAddress::lift($address);                                    // the rows deleted
 ```
 
-A notification to an address `EmailAddress::sendable()` refuses is skipped too, so ask both:
-`EmailAddress::sendable($address) && SuppressedAddress::blocking($address) === null`.
+A notification to an address `EmailAddress::sendable()` refuses is skipped too. `SuppressedAddress::mailable($address)`
+(since 1.6) means `sendable()` and not suppressed: it is false for a non-string, an unsendable address or a suppressed
+one.
 
 To unblock an address:
 
@@ -343,9 +368,9 @@ punycode domain) are the address rules the keys are built from.
   `email` and `notification`. Only its mail channel, named `'mail'` or `MailChannel::class`: the others still send. It
   reads the route as the mail channel does (one address or a list, either of which may be `Name <address>`, or a bare
   address => name map), and otherwise answers null, so your own `NotificationSending` listeners still run. Set
-  `skip_unsendable` to `false` to let such a send throw instead. A mailable sent with `Mail::to()` builds its addresses
-  before any event; ask `EmailAddress::sendable()` first.
-- A notification whose `toMail()` returns a mailable is judged on the notifiable's route, not on the mailable's own
+  `skip_unsendable` to `false` to let such a send throw instead. A `Mailable` sent with `Mail::to()` builds its
+  addresses before any event; ask `EmailAddress::sendable()` first.
+- A notification whose `toMail()` returns a `Mailable` is judged on the notifiable's route, not on the `Mailable`'s own
   recipients, so route such a notification a valid address or none.
 
 Suppression:
@@ -415,6 +440,13 @@ Suppression:
   ```
 
 ## Upgrading
+
+### From 1.5
+
+1.6 adds `unclaimed_mailbox` (`UnclaimedMailbox`) and `SuppressedAddress::mailable()`; nothing to change. If you
+followed the old keep-as-typed advice (`unique:users,email_canonical`), switch to `unclaimed_mailbox:users`, or
+`UnclaimedMailbox` with `ignore()` on a form that updates an account: an alias spelling passed the old rule and then hit
+the unique index.
 
 ### From 1.4
 

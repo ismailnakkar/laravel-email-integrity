@@ -10,6 +10,7 @@ use EmailIntegrity\Console\UpdateDisposableDomainsCommand;
 use EmailIntegrity\Http\SuppressionWebhook;
 use EmailIntegrity\Listeners\DropSuppressedMail;
 use EmailIntegrity\Listeners\SkipUnsendableMail;
+use EmailIntegrity\Rules\UnclaimedMailbox;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Mail\Events\MessageSending;
@@ -19,6 +20,8 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Factory as ValidationFactory;
+use Illuminate\Validation\InvokableValidationRule;
+use Illuminate\Validation\Validator;
 
 class EmailIntegrityServiceProvider extends ServiceProvider
 {
@@ -53,6 +56,23 @@ class EmailIntegrityServiceProvider extends ServiceProvider
             $this->extend($validator, 'not_disposable', 'disposable', fn (EmailIntegrity $email, mixed $value): bool => ! $email->isDisposable($value));
             $this->extend($validator, 'routable_domain', 'unroutable', fn (EmailIntegrity $email, mixed $value): bool => $email->hostResolves($value));
             $this->extend($validator, 'not_suppressed', 'suppressed', fn (EmailIntegrity $email, mixed $value): bool => ! is_string($value) || SuppressedAddress::blocking($value) === null);
+
+            // Its own extend: it needs the parameters ({table},{canonical},{email},{ignore id}), and its message is the
+            // one UnclaimedMailbox fails with, the app's validation.unique.
+            $validator->extend('unclaimed_mailbox', static function (string $attribute, mixed $value, array $parameters, Validator $validator): bool {
+                $validator->requireParameterCount(1, $parameters, 'unclaimed_mailbox');
+
+                $rule = InvokableValidationRule::make((new UnclaimedMailbox(...array_slice($parameters, 0, 3)))->ignore($parameters[3] ?? null))
+                    ->setValidator($validator);
+
+                if ($rule->passes($attribute, $value)) {
+                    return true;
+                }
+
+                $validator->fallbackMessages['unclaimed_mailbox'] = $rule->message()[0];
+
+                return false;
+            });
         });
 
         // Always listening and inert while suppression is off: the switch is read at send time. Package providers

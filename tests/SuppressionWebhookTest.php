@@ -79,15 +79,24 @@ class SuppressionWebhookTest extends TestCase
         $this->assertSame(SuppressionReason::bounced, SuppressedAddress::blocking('listed@example.com')?->reason);
     }
 
+    public function test_every_recipient_on_the_event_is_blocked(): void
+    {
+        $this->deliver($this->event('email.complained', ['one@example.com', 'Two@Example.com']))->assertNoContent();
+
+        $this->assertNotNull(SuppressedAddress::blocking('one@example.com'));
+        $this->assertNotNull(SuppressedAddress::blocking('two@example.com'));
+    }
+
     /** @return array<string, array{string, array<string, mixed>}> */
     public static function harmlessEvents(): array
     {
         return [
-            'a temporary bounce'    => ['email.bounced', ['bounce' => ['type' => 'Transient', 'subType' => 'MailboxFull']]],
-            'a bounce with no type' => ['email.bounced', []],
-            'a quota failure'       => ['email.failed', ['failed' => ['reason' => 'reached_daily_quota']]],
-            'a delivery'            => ['email.delivered', []],
-            'an open'               => ['email.opened', []],
+            'a temporary bounce'          => ['email.bounced', ['bounce' => ['type' => 'Transient', 'subType' => 'MailboxFull']]],
+            'a bounce with no type'       => ['email.bounced', []],
+            'a quota failure'             => ['email.failed', ['failed' => ['reason' => 'reached_daily_quota']]],
+            'a delivery'                  => ['email.delivered', []],
+            'an open'                     => ['email.opened', []],
+            'a type that is not a string' => ['email.bounced', ['bounce' => ['type' => ['Permanent']]]],
         ];
     }
 

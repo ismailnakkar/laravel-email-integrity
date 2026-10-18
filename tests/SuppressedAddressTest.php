@@ -58,6 +58,21 @@ class SuppressedAddressTest extends TestCase
         $this->assertNull(SuppressedAddress::blocking());
     }
 
+    /** sendable() and not suppressed, in one call. */
+    public function test_mailable_is_sendable_and_not_suppressed(): void
+    {
+        SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::complained);
+
+        $this->assertFalse(SuppressedAddress::mailable(null));
+        $this->assertFalse(SuppressedAddress::mailable('a(c)@example.com'));
+        $this->assertFalse(SuppressedAddress::mailable('janedoe+x@gmail.com'));
+        $this->assertTrue(SuppressedAddress::mailable('someone@example.com'));
+
+        config(['email-integrity.suppression.enabled' => false]);
+
+        $this->assertTrue(SuppressedAddress::mailable('janedoe+x@gmail.com'));
+    }
+
     /** Providers redeliver: the second event is a no-op, and the first reason sticks. */
     public function test_suppress_inserts_once_and_keeps_the_first_reason(): void
     {

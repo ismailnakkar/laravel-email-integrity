@@ -48,6 +48,15 @@ class SuppressedAddress extends Model
         return self::query()->whereIn('email', self::keys(...$addresses))->first();
     }
 
+    /**
+     * EmailAddress::sendable() and not suppressed: whether mail to $address gets through. Not Laravel's `Mailable`.
+     * A non-string is false, never a TypeError.
+     */
+    public static function mailable(mixed $address): bool
+    {
+        return EmailAddress::sendable($address) && self::blocking($address) === null;
+    }
+
     /** Insert-if-absent, so a redelivered event is a no-op and the first reason sticks. True for a new row. */
     public static function suppress(string $address, SuppressionReason $reason): bool
     {
