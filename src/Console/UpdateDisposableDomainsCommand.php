@@ -20,8 +20,7 @@ class UpdateDisposableDomainsCommand extends Command
         try {
             $count = $domains->update();
         } catch (Throwable $e) {
-            // Reported so the handler sees the cause: the scheduler reports only the exit code,
-            // and not even that for a runInBackground event.
+            // The scheduler reports only the exit code, and not even that for a runInBackground event.
             report($e);
 
             $this->components->error($e->getMessage());

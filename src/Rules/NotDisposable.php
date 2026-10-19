@@ -8,12 +8,7 @@ use Closure;
 use EmailIntegrity\EmailIntegrity;
 use Illuminate\Contracts\Validation\ValidationRule;
 
-/**
- * Refuses throwaway domains. Local lookup only — the address never leaves the app.
- *
- * Pair it with Laravel's own `email` rule, which owns the shape complaint; this rule
- * passes anything it cannot read a domain out of rather than duplicating that message.
- */
+/** Refuses throwaway domains, by a local lookup. Passes a value with no domain: pair it with `email:strict`. */
 class NotDisposable implements ValidationRule
 {
     public function __construct(private readonly EmailIntegrity $email) {}

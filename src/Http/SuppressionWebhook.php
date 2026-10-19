@@ -24,10 +24,7 @@ use Symfony\Component\RemoteEvent\RemoteEvent;
 use Symfony\Component\Webhook\Client\RequestParserInterface;
 use Symfony\Component\Webhook\Exception\RejectWebhookException;
 
-/**
- * Reads the mail provider's events through its Symfony parser and suppresses the recipients of a complaint, a
- * permanent bounce or the provider's own block. The package routes it, throttled and outside CSRF, at `suppression.webhook.path`; set that to null and route it yourself.
- */
+/** Suppresses the recipients of a complaint, a permanent bounce or the provider's block, as the parser reads them. */
 final class SuppressionWebhook
 {
     public function __invoke(Request $request): Response
@@ -42,8 +39,8 @@ final class SuppressionWebhook
         }
 
         try {
-            // Rebuilt from the raw body: Laravel's toArray() would hand the parser the input after TrimStrings and
-            // ConvertEmptyStringsToNull, which the signature does not cover.
+            // Not $request: Laravel's toArray() is the input after TrimStrings and ConvertEmptyStringsToNull, not
+            // the signed body.
             $events = Arr::wrap($parser->parse(new SymfonyRequest(server: $request->server->all(), content: $request->getContent()), $secret));
         } catch (RejectWebhookException $e) {
             if ($e->getPrevious() instanceof ParseException) {
@@ -54,7 +51,7 @@ final class SuppressionWebhook
                     return response()->noContent();
                 }
 
-                // Signed and one that blocks, so a parser bug (Symfony's "Invalid date"): refused, to be retried once fixed.
+                // Signed and blocking, so a parser bug (Symfony's "Invalid date"): refused, to retry once fixed.
                 report($e->getPrevious());
             }
 
@@ -79,8 +76,7 @@ final class SuppressionWebhook
      */
     private function warnOnce(string $message, array $context = []): void
     {
-        // Fails open, unreported: a cache that throws or keeps nothing (memcached while down, the null store: add()
-        // answers false without throwing) logs every one.
+        // Fails open: a cache that throws or keeps nothing (the null store's add() answers false) logs every one.
         $first = rescue(function () use ($message, $context): bool {
             $key = 'email-integrity:webhook-warning:' . hash('xxh128', serialize([$message, $context]));
 
@@ -121,9 +117,8 @@ final class SuppressionWebhook
             return null;
         }
 
-        // Only because Symfony's Resend parser decodes `whsec_<base64>` leniently: `whsec_` or a non-base64 tail would
-        // verify a forgery signed with an empty key. Strict for that parser and any wrapper of it (it is final, so a
-        // wrapper is how an app customises it); any other parser uses its secret as it is.
+        // Symfony's Resend parser decodes `whsec_<base64>` leniently: `whsec_` or a non-base64 tail verifies a forgery
+        // signed with an empty key. The prefix also catches a wrapper of that final class.
         $key = $parser instanceof ResendRequestParser || str_starts_with($secret, 'whsec_')
             ? base64_decode(Str::chopStart($secret, 'whsec_'), true)
             : $secret;
@@ -141,8 +136,8 @@ final class SuppressionWebhook
 
         $from = Arr::get($event->getPayload(), 'data.from');
 
-        // One provider account can send for several domains, and each endpoint then receives them all. A provider
-        // with one webhook per domain sends no sender, and needs no filter.
+        // One provider account may send for several domains, and each endpoint receives every event. A provider with
+        // one webhook per domain sends no sender: nothing to filter.
         if ($from !== null) {
             // Thrown, not skipped: a 204 here would drop every event for good, and a 500 makes the provider retry.
             $own = EmailAddress::domainOf(EmailAddress::bare((string)config('mail.from.address')))

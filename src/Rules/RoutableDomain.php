@@ -8,13 +8,7 @@ use Closure;
 use EmailIntegrity\EmailIntegrity;
 use Illuminate\Contracts\Validation\ValidationRule;
 
-/**
- * Refuses domains that cannot receive mail at all — the dead typo (`gmial.cm`) no
- * blocklist will ever carry, caught while the user is still looking at the field.
- *
- * Belongs on entry forms, not on a payout path: this is the one rule here that can
- * fail for reasons outside the user's control.
- */
+/** Refuses a domain that cannot receive mail. For entry forms, not payout or login paths: it depends on DNS. */
 class RoutableDomain implements ValidationRule
 {
     public function __construct(private readonly EmailIntegrity $email) {}

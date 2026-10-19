@@ -50,7 +50,6 @@ class RulesTest extends TestCase
         );
     }
 
-    /** With the check off the rule must be inert, not merely lenient. */
     public function test_the_host_rule_passes_when_the_check_is_disabled(): void
     {
         $this->assertTrue($this->validate('a@nonexistent.invalid', [
@@ -65,7 +64,7 @@ class RulesTest extends TestCase
             'email-integrity.host.fail_open' => false,
         ]);
 
-        // .invalid is reserved by RFC 2606 and can never resolve, so this needs no network.
+        // RFC 2606 reserves .invalid: it never resolves.
         $validator = Validator::make(
             ['email' => 'a@definitely-not-real.invalid'],
             ['email' => [$this->app->make(RoutableDomain::class)]],
@@ -88,11 +87,6 @@ class RulesTest extends TestCase
         ]));
     }
 
-    /**
-     * fail_open only fires during a real outage. With a working resolver the root-server
-     * probe succeeds, so a genuinely dead domain is still refused — and that verdict, being
-     * definitive, is the only kind written to the cache.
-     */
     public function test_fail_open_still_refuses_a_dead_domain_while_the_resolver_works(): void
     {
         if (! @checkdnsrr('a.root-servers.net', 'A')) {
@@ -111,7 +105,6 @@ class RulesTest extends TestCase
         $this->assertTrue(Cache::has('email-integrity:host:' . hash('xxh128', 'definitely-not-real.invalid')));
     }
 
-    /** A resolver that times out would make every signup wait out four lookups, so an outage is remembered briefly. */
     public function test_a_remembered_outage_answers_fail_open_without_a_lookup(): void
     {
         if (! @checkdnsrr('a.root-servers.net', 'A')) {
@@ -130,7 +123,7 @@ class RulesTest extends TestCase
         $this->assertFalse(Cache::has('email-integrity:host:' . hash('xxh128', 'definitely-not-real.invalid')));
     }
 
-    /** RFC 7505: example.com publishes `MX 0 .` beside a live A record, which says it takes no mail. */
+    /** example.com publishes RFC 7505's null MX (`MX 0 .`) beside an A record. */
     public function test_a_null_mx_refuses_mail_despite_an_a_record(): void
     {
         if (! @checkdnsrr('a.root-servers.net', 'A')) {
@@ -142,11 +135,6 @@ class RulesTest extends TestCase
         $this->assertFalse($this->app->make(EmailIntegrity::class)->hostResolves('a@example.com'));
     }
 
-    /**
-     * Why the README says `email:strict` and not `email`. An address literal has no domain
-     * to read, so both rules here pass it by design — which makes bare `email` a hole big
-     * enough to drive the whole package through. This fails if that stops being true.
-     */
     public function test_an_address_literal_needs_strict_to_be_refused(): void
     {
         $rules = [$this->app->make(NotDisposable::class), $this->app->make(RoutableDomain::class)];
@@ -163,10 +151,6 @@ class RulesTest extends TestCase
         $this->assertFalse($this->validate('a@mailinator.com', explode('|', $rules)));
     }
 
-    /**
-     * The string rule must carry the package's own message. Validator::extend stores its
-     * third argument raw and never translates it, so getting this wrong prints the key.
-     */
     public function test_the_string_rule_reports_the_translated_message(): void
     {
         $validator = Validator::make(['email' => 'a@mailinator.com'], ['email' => 'not_disposable']);
@@ -175,7 +159,6 @@ class RulesTest extends TestCase
         $this->assertStringContainsString('Temporary email addresses', $validator->errors()->first('email'));
     }
 
-    /** A complaint keeps the inbox out under any spelling, so a new account cannot route mail back into it. */
     public function test_the_suppression_rule_refuses_a_blocked_address(): void
     {
         config(['email-integrity.suppression.enabled' => true]);

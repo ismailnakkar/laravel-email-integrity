@@ -17,7 +17,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use stdClass;
 use Symfony\Component\RemoteEvent\Exception\ParseException;
 
-/** Signed the way Resend signs (Svix), with the `Name <address>` sender and recipients Resend really sends. */
+/** Signed as Resend signs (Svix), with the `Name <address>` sender and recipients Resend sends. */
 class SuppressionWebhookTest extends TestCase
 {
     private const KEY = 'a-32-byte-shared-key-for-signing';
@@ -48,7 +48,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertNull(SuppressedAddress::blocking('member+other@corp.example'));
     }
 
-    /** A stranger typed `member+x@` into a public form and it bounced on a server without tags. */
     public function test_a_strangers_tagged_bounce_leaves_the_member_mailable(): void
     {
         $this->deliver($this->event('email.bounced', ['member+x@corp.example'], ['bounce' => ['type' => 'Permanent']]))
@@ -59,7 +58,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertSame(1, $this->app->make('mailer')->getSymfonyTransport()->messages()->count());
     }
 
-    /** A `_ci` collation folds these onto `jack@`, so a stranger's bounce on one would block the real inbox. */
     public function test_a_lookalike_spelling_never_blocks_the_ascii_address(): void
     {
         $this->deliver($this->event('email.bounced', ['ｊａｃｋ@example.com', "jac\u{212A}@example.com", 'jäck@example.com'], ['bounce' => ['type' => 'Permanent']]))
@@ -70,7 +68,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertSame(1, $this->app->make('mailer')->getSymfonyTransport()->messages()->count());
     }
 
-    /** Resend skipped the send against its own list. */
     public function test_a_suppressed_event_blocks_the_address(): void
     {
         $this->deliver($this->event('email.suppressed', ['listed@example.com'], ['suppressed' => ['message' => 'On the account suppression list']]))
@@ -109,7 +106,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertSame(0, SuppressedAddress::query()->count());
     }
 
-    /** Signed, but a type the parser does not model: answered, or the provider retries it for days. */
     public function test_an_unsupported_signed_type_is_answered(): void
     {
         Log::spy();
@@ -120,7 +116,6 @@ class SuppressionWebhookTest extends TestCase
         Log::shouldHaveReceived('warning')->with('Mail provider event the parser does not model ignored.', ['reason' => 'Unsupported event "email.scheduled".']);
     }
 
-    /** A bounce the parser cannot read (Symfony's "Invalid date") must be retried once fixed, not answered and lost. */
     public function test_an_unreadable_event_of_a_type_that_blocks_is_refused_and_reported(): void
     {
         Exceptions::fake();
@@ -142,7 +137,6 @@ class SuppressionWebhookTest extends TestCase
         ];
     }
 
-    /** Nothing else reports a 406, so a rotated secret would otherwise fail silently until the provider gives up. */
     #[DataProvider('forgeries')]
     public function test_a_forgery_is_refused_with_the_parsers_status(string $key, int $age, bool $signed): void
     {
@@ -168,7 +162,6 @@ class SuppressionWebhookTest extends TestCase
         ];
     }
 
-    /** Resend's parser decodes the secret leniently: each of these signs with an empty or guessable key. */
     #[DataProvider('weakSecrets')]
     public function test_a_weak_secret_refuses_everything(?string $secret): void
     {
@@ -182,7 +175,6 @@ class SuppressionWebhookTest extends TestCase
         Log::shouldHaveReceived('warning')->with('Mail provider webhook refused: the signing secret is missing or too short.', []);
     }
 
-    /** Anyone can post to the URL, and each warning may be an event in the app's error tracker. */
     public function test_a_repeated_refusal_is_logged_once_every_five_minutes(): void
     {
         Log::spy();
@@ -217,7 +209,6 @@ class SuppressionWebhookTest extends TestCase
         $warned()->twice();
     }
 
-    /** The null store's add() answers false as if the key were taken, which would silence every refusal for good. */
     public function test_a_cache_that_keeps_nothing_logs_every_refusal(): void
     {
         Log::spy();
@@ -229,7 +220,6 @@ class SuppressionWebhookTest extends TestCase
         Log::shouldHaveReceived('warning')->with('Mail provider webhook refused.', ['status' => 406, 'reason' => 'No signatures found matching the expected signature.'])->twice();
     }
 
-    /** A wrapper around Resend's final parser still gets its `whsec_` secret decoded strictly. */
     public function test_a_whsec_secret_is_decoded_strictly_for_any_parser(): void
     {
         config([
@@ -250,7 +240,6 @@ class SuppressionWebhookTest extends TestCase
         ];
     }
 
-    /** One provider account sends for several domains, and each endpoint receives every one of them. */
     #[DataProvider('foreignSenders')]
     public function test_an_event_for_another_sending_domain_is_ignored(string $from): void
     {
@@ -270,7 +259,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertNotNull(SuppressedAddress::blocking('someone@example.com'));
     }
 
-    /** TrimStrings turns "" into null, and the parser would then call the signed event malformed for ever. */
     public function test_an_empty_subject_survives_the_input_middleware(): void
     {
         $this->deliver($this->event('email.complained', ['someone@example.com'], ['subject' => '']))->assertNoContent();
@@ -278,7 +266,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertNotNull(SuppressedAddress::blocking('someone@example.com'));
     }
 
-    /** Another provider: a plain secret used as it is, one recipient, and no sender to filter on. */
     public function test_another_parser_with_no_sender_names_its_one_recipient(): void
     {
         config([
@@ -294,7 +281,6 @@ class SuppressionWebhookTest extends TestCase
         $this->assertSame(SuppressionReason::complained, SuppressedAddress::blocking('janedoe@gmail.com')?->reason);
     }
 
-    /** Without the app's own sending domain every event would look foreign and be dropped with a 204, for good. */
     public function test_an_unset_sender_address_is_refused_so_the_provider_retries(): void
     {
         config(['mail.from.address' => null]);
@@ -306,7 +292,6 @@ class SuppressionWebhookTest extends TestCase
         $this->deliver($this->event('email.complained', ['someone@example.com']));
     }
 
-    /** Routing the webhook while the guard is off would store blocks that stop nothing. */
     public function test_the_webhook_refuses_to_run_while_suppression_is_off(): void
     {
         config(['email-integrity.suppression.enabled' => false]);

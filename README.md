@@ -1,40 +1,29 @@
 # Laravel Email Integrity
 
-Refuse disposable and unroutable email domains at the point they are entered, collapse alias spellings so one
-mailbox cannot become several accounts, and, once you turn it on, stop mailing the addresses your mail provider
-reports as bounced or complained.
+Validation rules that refuse disposable and unroutable email domains, a canonical form that makes one mailbox one
+account, and an opt-in suppression list that stops mail to addresses your mail provider reports as bounced or
+complained.
 
-The two domain checks never send anything:
-
-- **Is it a throwaway?** A local hash-set lookup against an aggregated list, plus your own allow/deny entries.
-- **Can it receive mail at all?** An MX / A / AAAA lookup, which catches the dead typo (`gmial.cm`) that no blocklist
-  will ever carry.
-
-Neither says the mailbox exists — only a verification link does that, and this package stops short of it so your app
-decides when to demand one. It is not a substitute either way: a typo-squat like `gmai.com` has a live MX and accepts
-mail, so the user clicks the link and verifies fine. Verification alone does not stop that; the list does. Use both.
+The domain checks never send mail, so they cannot prove a mailbox exists: keep your verification link.
 
 ## Requirements
 
-PHP 8.2+ and Laravel 12.1+ or 13. `ext-intl` is suggested: without it an internationalised domain is matched as typed,
-so the unicode spelling of a listed domain is not caught.
+PHP 8.2+ and Laravel 12.1+ or 13. Without `ext-intl` an internationalised domain is matched as typed, so the unicode
+spelling of a listed domain is not caught.
 
-Suppression's webhook also needs `symfony/webhook` (`^7.4 || ^8.0`) and your provider's Symfony bridge: for Resend,
-`symfony/resend-mailer` `^7.4.18 || ^8.1.6`, the first to refuse a replayed event and to read `email.suppressed` (an
-older one is a Composer conflict). Nothing is required while suppression is off.
+Suppression's webhook also needs `symfony/webhook` `^7.4 || ^8.0` and your provider's Symfony bridge: for Resend,
+`symfony/resend-mailer` `^7.4.18 || ^8.1.6` (older versions conflict).
 
-Left to your app:
+Your app provides:
 
-- Running Laravel's scheduler, and alerting on a failed update.
-- `bail`, `max:255` and `email:strict` ahead of the rules (see [Use](#use)).
-- The unique index that makes one mailbox one account, with a binary collation on MySQL and MariaDB.
-- For suppression: the `suppressed_addresses` table, a provider
-  endpoint subscribed to the right events only, `mail.from.address` on the provider's sending domain, and clearing the
-  provider's own list when you lift an address.
-- One recipient per message wherever someone else typed a recipient: the provider's event names the message's whole To
-  list, and every address on it is suppressed.
-- A parser that checks the provider's IP addresses (Postmark, Brevo) needs your trusted proxies set, or it sees your
-  proxy's address instead.
+- A running scheduler, and an alert when `email-integrity:update` fails (it exits non-zero and passes the exception to
+  `report()`).
+- `bail`, `max:255` and `email:strict` ahead of the rules ([Validation](#validation)).
+- The unique index that makes one mailbox one account, with a binary collation on MySQL and MariaDB
+  ([Collation](#collation)).
+- For suppression: the `suppressed_addresses` table, `mail.from.address` on the provider's sending domain, trusted
+  proxies when the parser checks the provider's IP (Postmark, Brevo), and one recipient per message wherever someone
+  else typed the recipient: an event suppresses every address on the message's To list.
 
 ## Install
 
@@ -44,153 +33,63 @@ php artisan vendor:publish --tag=email-integrity-config
 php artisan email-integrity:update
 ```
 
-Upstream publishes daily, so the package schedules `email-integrity:update` daily at 03:00, on every server: each keeps
-its own list file. Do not schedule it again, or it runs twice; to retime it, set `schedule` to `false` and schedule it
-yourself, by name.
+The package schedules `email-integrity:update` daily at 03:00 on every server, as each keeps its own list file; do not
+schedule it again.
 
-Alert on failure, because a list that silently stops updating is a list that silently stops working. A failed update
-exits non-zero and passes the exception to `report()`, so it reaches your exception handler with no `onFailure` hook.
+## Configuration
 
-## Setup
+| Key                          | Default                   | Meaning                                                   |
+|------------------------------|---------------------------|-----------------------------------------------------------|
+| `enabled`                    | `true`                    | Off, both domain checks pass everything.                  |
+| `schedule`                   | `true`                    | Schedules the daily update; `false` leaves it to you.     |
+| `allow`                      | `[]`                      | Domains never refused as disposable, nor looked up.       |
+| `deny`                       | `[]`                      | Domains refused as disposable.                            |
+| `disposable.sources`         | one URL                   | URLs of JSON arrays of domains, merged by the update.     |
+| `disposable.storage`         | `storage/framework/…`     | Full path of the merged list file.                        |
+| `disposable.timeout`         | `30`                      | Seconds per source request.                               |
+| `disposable.min_domains`     | `1000`                    | Fewer from any source keeps the previous list.            |
+| `host.enabled`               | `true`                    | Off, `routable_domain` passes everything.                 |
+| `host.fail_open`             | `true`                    | The answer while the resolver is unreachable.             |
+| `host.cache_ttl`             | `3600`                    | Seconds a resolver's answer is cached.                    |
+| `suppression.enabled`        | `false`                   | Suppression on or off; `enabled` does not touch it.       |
+| `suppression.own_inboxes`    | `[]`                      | Your own inboxes: a block on one is passed to `report()`. |
+| `suppression.webhook.path`   | `email-integrity/webhook` | The webhook's URI; null registers no route.               |
+| `suppression.webhook.domain` | `null`                    | The one host it answers on; null answers on any.          |
+| `suppression.webhook.parser` | `ResendRequestParser`     | The Symfony `RequestParserInterface` that reads events.   |
+| `suppression.webhook.secret` | `RESEND_WEBHOOK_SECRET`   | The parser's signing secret.                              |
 
-| Key                             | Purpose                                                                           |
-|---------------------------------|-----------------------------------------------------------------------------------|
-| `enabled`                       | Master switch. Off leaves both domain rules inert, so a bad list needs no deploy.  |
-| `schedule`                      | Schedules `email-integrity:update` daily at 03:00. False leaves it to you.         |
-| `skip_unsendable`               | Skips a mail notification the send would throw on. False lets it throw.            |
-| `allow`                         | Wins over everything, including the fetched list.                                  |
-| `deny`                          | Your own additions, for lookalikes the lists have not caught yet (`gmail2.gq`).    |
-| `disposable.sources`            | The lists to merge.                                                                |
-| `disposable.min_domains`        | A source returning fewer aborts the update; the previous list survives.            |
-| `host.fail_open`                | What an unreachable resolver means.                                                |
-| `suppression.enabled`           | Suppression on or off. Off by default.                                             |
-| `suppression.own_inboxes`       | Your contact or admin inboxes: a block on one is reported as an error.             |
-| `suppression.webhook.path`      | The URL the provider posts to. Null registers no route.                            |
-| `suppression.webhook.domain`    | The one host it answers on. Null answers on any.                                   |
-| `suppression.webhook.parser`    | The Symfony `RequestParserInterface` that reads your provider's events.            |
-| `suppression.webhook.secret`    | Its signing secret, `RESEND_WEBHOOK_SECRET` by default.                            |
+`enabled` and `host.enabled` read `EMAIL_INTEGRITY_ENABLED` and `EMAIL_INTEGRITY_HOST_CHECK`. The default source is
+`disposable/disposable-email-domains` on jsDelivr. An `allow` or `deny` entry covers the domain and its subdomains; the
+fetched list is matched exactly, so a provider with a wildcard MX (`anything.mailinator.com`) needs a `deny` entry.
 
-A key the published file leaves out keeps its default, inside a group too; only a published `suppression.webhook` group
-without `path` gets none, so no route. A list you set replaces the default whole.
+A key the published file leaves out keeps its default, inside a group too. A list you set replaces the default whole.
 
-`allow` and `deny` cover the domain **and every subdomain**. The fetched list is matched exactly, so a provider with a
-wildcard MX (`anything.mailinator.com` is a live inbox) is a one-line `deny` entry. The master switch does not touch
-suppression: that list is yours, not a third party's.
-
-### Suppression
-
-An opt-in blocklist: a complaint, a permanent bounce or the provider's own block puts the address in
-`suppressed_addresses`, and no mail reaches it again until you lift it.
-
-1. Install the webhook's packages:
-
-   ```bash
-   composer require symfony/webhook symfony/resend-mailer
-   ```
-
-2. Create the table. A new app publishes the migration:
-
-   ```bash
-   php artisan vendor:publish --tag=email-integrity-migrations
-   php artisan migrate
-   ```
-
-   **Adopting an existing table.** A `suppressed_addresses` table with `id`, `email` (a unique index on it), `reason`
-   as `bounced` or `complained`, and timestamps works as it is. The unique index is what makes concurrent deliveries
-   for one address write one row. Run `SuppressedAddress::rekey()` once, for example in a migration whose `down()`
-   does nothing: each row is rewritten to its key (a complaint to its inbox, a bounce to its lowercase, punycode
-   spelling), and a row whose key another row already holds is deleted, as your database's collation sees it. A row
-   with no key is deleted first, and logged as a warning with its `email` and `reason`. Preview both first (the `''`
-   group holds the rows with no key):
-
-   ```php
-   SuppressedAddress::query()->get()
-       ->groupBy(fn (SuppressedAddress $row) => SuppressedAddress::key($row->email, $row->reason))
-       ->filter(fn ($rows, $key) => $key === '' || $rows->count() > 1);
-   ```
-
-   `rekey()` recomputes each key from the stored `email`, so it cannot unfold a domain stored already in transitional
-   punycode (`strasse.de` for `straße.de`). Check rows whose domain holds `ss` or `xn--` against the original
-   addresses first.
-
-3. Turn it on in the published config, with a literal `true` rather than an env switch a deploy can forget:
-
-   ```php
-   'suppression' => [
-       'enabled' => true,
-       'own_inboxes' => [env('MAIL_CONTACT_ADDRESS')],
-       // ...
-   ],
-   ```
-
-   Empty entries in `own_inboxes` are skipped, so an unset variable is harmless.
-
-4. Put the provider's signing secret in `.env` (`RESEND_WEBHOOK_SECRET=whsec_…`).
-
-5. The package routes the webhook itself, at `suppression.webhook.path` (`email-integrity/webhook` by default), named
-   `email-integrity.webhook`. It has no session and no CSRF check, and is throttled to 120 a minute per IP. It exists
-   only while `suppression.enabled` is `true`. Set `path` to null to route `SuppressionWebhook` yourself.
-
-6. Point the provider at that URL (`https://your-app.example/email-integrity/webhook`). For Resend, subscribe the endpoint to `email.bounced`, `email.complained` and
-   `email.suppressed` only: its `contact.*` and `suppression.*` events fail Symfony's payload check with a 406 that
-   looks like a forgery, and Svix retries them until it disables the endpoint.
-
-**Another provider:** set `suppression.webhook.parser` to its Symfony parser (for example
-`Symfony\Component\Mailer\Bridge\Postmark\Webhook\PostmarkRequestParser`, from `symfony/postmark-mailer`) and the
-secret to what that parser expects. Complaints are recorded for any provider. A bounce is recorded only when the payload
-marks it permanent the way Resend's does (`data.bounce.type`), so another provider's bounces write nothing. Amazon SES
-has no Symfony parser; write your own `RequestParserInterface` for it.
-
-## Use
+## Validation
 
 ```php
-public function rules(): array
-{
-    return [
-        'email' => 'bail|required|max:255|email:strict|unique:users|not_disposable|routable_domain',
-    ];
-}
+'email' => 'bail|required|max:255|email:strict|unique:users|not_disposable|routable_domain',
 ```
 
-`not_disposable`, `routable_domain`, `not_suppressed` and `unclaimed_mailbox` are registered for you — no import, no
-`app()`. The first three carry the package's messages in the app's current locale; `unclaimed_mailbox` (see
-[One mailbox, one account](#one-mailbox-one-account)) fails with your app's `validation.unique`.
+Keep that order:
 
-Every part of that order is load-bearing:
+- **`bail`**, or a malformed address still reaches the DNS lookup.
+- **`email:strict`**, not `email`: bare `email` accepts the address literal `a@[192.0.2.1]`, which has no domain, so
+  both rules pass it.
+- **Cheapest first:** `max:255` before the `email` parser, `not_disposable` (in memory) before `routable_domain` (DNS).
 
-- **`bail`** is not optional. Without it a failed `email` stops nothing, so a malformed address still reaches the DNS
-  lookup — several blocking resolutions on a name the attacker chose, for input already known to be invalid, on an
-  unauthenticated endpoint.
-- **`email:strict`, not `email`.** Bare `email` accepts the address literal `attacker@[192.0.2.1]`, which has no domain
-  to read, so both rules pass it and the package goes inert. `strict` rejects it, along with quoted local parts and bare
-  TLDs.
-- **`max:255` before `email`**, because bounding the input is one length check and the parser is a full lexer pass over
-  whatever was pasted.
-- **Disposable before routable.** Disposable is a free in-memory lookup that can refuse on its own; routable is the
-  network. Never put the network first.
-
-Rule objects exist if you want the type back. Same decision, one difference in how you re-word the message: both forms
-honour the package's own `email-integrity::messages.*` lines, but a `validation.custom.email.not_disposable` line
-reaches only the string form — a rule object's message goes straight into the error bag without passing Laravel's
-message lookup.
+`not_disposable`, `routable_domain`, `not_suppressed` and `unclaimed_mailbox` are registered for you. The rule objects:
 
 ```php
 use EmailIntegrity\Rules\NotDisposable;
 use EmailIntegrity\Rules\NotSuppressed;
 use EmailIntegrity\Rules\RoutableDomain;
-use EmailIntegrity\Rules\UnclaimedMailbox;
 
 'email' => ['bail', 'required', 'max:255', 'email:strict', 'unique:users',
-    app(NotDisposable::class), app(NotSuppressed::class), app(RoutableDomain::class)],
-
-// Keeping the address as typed: in place of 'unique:users' (->ignore($user) on a form that updates $user)
-'email' => ['bail', 'required', 'max:255', 'email:strict', new UnclaimedMailbox('users'),
-    app(NotDisposable::class), app(NotSuppressed::class), app(RoutableDomain::class)],
+    app(NotDisposable::class), new NotSuppressed, app(RoutableDomain::class)],
 ```
 
-`not_suppressed` (`NotSuppressed`) refuses an address the suppression list stops, so a new account cannot route mail
-back into an inbox that complained; it passes everything while suppression is off. Its message is
-`email-integrity::messages.suppressed`; translate it in `lang/vendor/email-integrity/{locale}/messages.php`.
+`not_suppressed` refuses an address the [suppression](#suppression) list stops, and passes everything while suppression
+is off. A `validation.custom.email.*` line rewords only the string form; [Translations](#translations) reword both.
 
 Outside validation:
 
@@ -201,24 +100,23 @@ use EmailIntegrity\EmailIntegrity;
 app(EmailIntegrity::class)->isDisposable($address);
 app(EmailIntegrity::class)->hostResolves($address);
 EmailAddress::sendable($address); // false where a send to this bare address would throw
-EmailAddress::canonical($address);
 ```
 
-### Where not to put the routable check
+### The routable check
 
-Not on a payout or login path. It is the one rule here that can fail for reasons outside the user's control, and a DNS
-blip should never hold someone's money. It belongs on entry forms, where a failure means "check your typo" and the user
-can act on it.
+Keep `routable_domain` on entry forms, not on payout or login paths: it depends on DNS. It passes a domain with an MX
+or an A/AAAA record, and refuses an RFC 7505 null MX. An unreachable resolver is remembered for 30 seconds, not cached
+for `cache_ttl`.
 
-`fail_open` (default `true`) decides what an unreachable resolver means. A dead domain is still refused while the
-resolver is healthy — the lookup probes a root server to tell "no such record" from "resolver unavailable". During a
-real outage the two are indistinguishable, and `fail_open` decides. An unreachable resolver is remembered for 30
-seconds, so a resolver that times out costs one round of lookups, not one per signup.
+## One mailbox, one account
 
-### One mailbox, one account
+`EmailAddress::canonical()` names the inbox an address reaches: lowercased, `+` tag stripped and, for Gmail, dots
+dropped and `googlemail.com` read as `gmail.com`. `ab+1@gmail.com`, `a.b@gmail.com` and `AB@googlemail.com` are all
+`ab@gmail.com`. Nothing else is folded: dots name different people at other providers, `-` is part of a name, and a
+shared MX is not a shared namespace. A quoted (`"a+b"@example.com`) or empty (`+3@example.com`) local part has no
+canonical form: null.
 
-`a+1@gmail.com`, `a.b@gmail.com` and `ab@googlemail.com` are **one inbox** and three rows past `unique:users`.
-Canonicalise before you validate and core's `unique` does the rest — what you check is what you store:
+Canonicalise before validating, and core `unique` catches every alias:
 
 ```php
 use EmailIntegrity\EmailAddress;
@@ -229,101 +127,119 @@ protected function prepareForValidation(): void
 }
 ```
 
-Keep the unique index on `email`, with a binary collation (see [Collation](#collation)). The rule is the friendly error;
-the index is the enforcement, and only the index survives two simultaneous signups.
+You then store `ab@gmail.com`, not what was typed, so canonicalise at sign-in and password reset too. Keep the unique
+index on `email`: the rule is the friendly error, only the index survives two simultaneous signups.
 
-The cost: you store `ab@gmail.com`, not `A.B+promo@GoogleMail.com`, so canonicalise the address at sign-in and password
-reset too.
-Delivery is identical on every provider that treats `+` as a tag, but the user's tag is gone.
+### Keeping the address as typed
 
-**To keep the address as typed**, add a nullable unique `email_canonical` column and let the cast fill it, then
-validate with `unclaimed_mailbox:users` (since 1.6) in place of `unique:users`, and on a form that updates an account
-with `(new UnclaimedMailbox('users'))->ignore($user)` in place of `Rule::unique('users')->ignore($user)`:
+Add a nullable unique `email_canonical` column and let the cast fill it on assignment, `saveQuietly()` included:
 
 ```php
 use EmailIntegrity\Casts\CanonicalEmail;
 
 protected function casts(): array
 {
-    return ['email' => CanonicalEmail::class];
+    return ['email' => CanonicalEmail::class]; // CanonicalEmail::class . ':identity' fills `identity` instead
 }
 ```
 
-Core `unique` compares the address as typed, so an alias spelling passes it and the unique index then throws.
-`unclaimed_mailbox:{table},{canonical_column},{email_column},{ignore_id}` (defaults `email_canonical`, `email`, none),
-or `new UnclaimedMailbox($table, $canonical, $email)`, refuses an address whose canonical form a row holds. A row whose
-canonical column is NULL still holds its exact address, compared byte for byte. `{ignore_id}` and
-`->ignore($id, $idColumn)` skip that row, as core's do. It fails with your app's `validation.unique` message. For
-example: `'bail|required|max:255|email:strict|unclaimed_mailbox:users|not_disposable|routable_domain'`.
+Where there is no canonical form the cast stores the address as typed. Keep the column out of `$fillable`: with
+`$guarded = []` an `email_canonical` key in the request overwrites the cast's value, and one mailbox registers
+unlimited accounts.
 
-A cast, not a `saving` hook: `saveQuietly()` fires no events, and a null left there is a row the unique index will not
-police. `CanonicalEmail::class . ':identity'` renames the column.
+Validate with `unclaimed_mailbox:users` in place of `unique:users`, which passes an alias the index then throws on. Its
+parameters are `{table},{canonical_column},{ignore_id}` (defaults `email_canonical`, none); the object is
+`new UnclaimedMailbox($table, $canonical)`, with `->ignore($id, $idColumn)` as on `Rule::unique()`. It fails with your
+`validation.unique` message; reword it under `unclaimed_mailbox`, not `unique`.
 
-Keep that column out of `$fillable`. The cast writes it; the request must not. With `$guarded = []` an
-`email_canonical` key in the request body overwrites what the cast computed, and `User::create($request->all())`
-registers unlimited accounts on one mailbox.
-
-Backfill before adding the index — an existing table usually has collisions:
+Find the account at sign-in and password reset by `email_canonical`:
 
 ```php
-foreach (User::lazyById() as $user) {
-    $user->forceFill(['email_canonical' => EmailAddress::canonical($user->email) ?? $user->email])
-        ->saveQuietly();
-}
+$user = User::where('email_canonical', EmailAddress::canonical($typed) ?? $typed)->first();
 ```
 
-```sql
-select email_canonical, count(*) from users group by email_canonical having count(*) > 1;
-```
+### Collation
 
-To keep both rows of a collision, leave the later row's `email_canonical` NULL; `unclaimed_mailbox` still refuses its
-exact address.
-
-#### Collation
-
-On MySQL and MariaDB the column the unique index sits on needs a binary collation. Their defaults
-(`utf8mb4_unicode_ci`, `utf8mb4_0900_ai_ci`) fold `ｊａｃｋ@gmail.com`, `jäck@gmail.com` and `jac\u{212A}@gmail.com` (KELVIN
-SIGN) onto `jack@gmail.com`. `email:strict` accepts all three and `canonical()` keeps them apart, so under such a
-collation a stranger who registers one first locks the real owner out. `canonical()` lowercases ASCII itself, so the
-binary comparison is exact:
+On MySQL and MariaDB the column the unique index sits on needs a binary collation. The defaults (`utf8mb4_unicode_ci`,
+`utf8mb4_0900_ai_ci`) fold lookalikes such as `jäck@gmail.com` onto `jack@gmail.com`, so a stranger who registers one
+first locks the owner out. `canonical()` lowercases ASCII itself, so the binary comparison is exact:
 
 ```php
 $table->string('email_canonical')->nullable()->unique()->collation('utf8mb4_bin');
 ```
 
-Any other column that decides whether an address is taken needs the same: give `users.email` (or the canonical column)
-a binary collation. A collation belongs to the column on MySQL and MariaDB, not the index, so a binary `users.email` makes
-every `where email = ?` case-sensitive, including Laravel's stock sign-in and password-reset lookups. When you keep the
-address as typed, leave `users.email` under its default collation, drop its unique index, and rely on `email_canonical`
-alone. PostgreSQL and SQLite compare exactly by default.
+A collation belongs to the column, not the index, so a binary `users.email` makes every `where email = ?`
+case-sensitive, Laravel's stock sign-in and password reset included. Keeping the address as typed, leave `users.email`
+on its default collation, drop its unique index and rely on `email_canonical`. PostgreSQL and SQLite compare exactly by
+default.
 
-In both modes, look the account up at sign-in and password reset by the binary column, not by `email`:
-`where email_canonical = EmailAddress::canonical($typed) ?? $typed`. Under a case-insensitive `email`, a lookup by
-`email` can return a lookalike's row. Keeping the address as typed, check first for a row whose `email_canonical` is
-NULL and that holds the exact address, compared byte for byte, then for the canonical match:
+## Suppression
 
-```php
-$user = User::whereNull('email_canonical')->where('email', $typed)->get()
-    ->first(fn (User $row) => $row->email === $typed)
-    ?? User::where('email_canonical', EmailAddress::canonical($typed) ?? $typed)->first();
-```
+Off by default. Once on, a complaint, a permanent bounce or the provider's own block puts the address in
+`suppressed_addresses`, and no mail reaches it until you lift it.
 
-What it will and will not merge:
+1. Install the webhook's packages: `composer require symfony/webhook symfony/resend-mailer`.
+2. Create the table:
 
-- **Dots collapse for Gmail only.** Outlook, Yahoo, iCloud, Proton, Fastmail and every self-hosted domain treat `a.b@`
-  and `ab@` as two people. Merging them would refuse a real signup, which is worse than the duplicate it prevents.
-- **`+` is stripped everywhere** — every mass provider, Postfix and Exim treat it as a tag. **`-` never is:** it is
-  qmail's delimiter but an ordinary name character elsewhere, so folding `mary-jane@` onto `mary@` would lock out a real
-  person.
-- **A quoted (`"a+b"@example.com`) or empty (`+3@example.com`) local part has no canonical form.** Store the address as
-  typed instead — a nullable unique index accepts unlimited NULLs.
-- **Nothing beyond Gmail is folded.** Shared MX is not proof of a shared namespace; yahoo.com and ymail.com are the
-  same infrastructure and different people.
+   ```bash
+   php artisan vendor:publish --tag=email-integrity-migrations
+   php artisan migrate
+   ```
+3. In the published config, set `suppression.enabled` to a literal `true`, not an env switch a deploy can forget, and
+   add your contact or admin inboxes to `own_inboxes` (empty entries are skipped).
+4. Put the signing secret in `.env`: `RESEND_WEBHOOK_SECRET=whsec_…`.
+5. Point the provider at `https://your-app.example/email-integrity/webhook`. For Resend, subscribe it to
+   `email.bounced`, `email.complained` and `email.suppressed` only: its `contact.*` and `suppression.*` events fail
+   Symfony's payload check with a 406, and Svix retries them until it disables the endpoint.
 
-### Suppressed addresses
+The package registers that route (`POST`, named `email-integrity.webhook`, throttled to 120 a minute) only while
+suppression is on. It has no middleware group, so no session or CSRF check. Set `path` to null to route
+`SuppressionWebhook` yourself.
 
-The send guard needs nothing from you. Ask first where a send that silently does not happen would lose something — an
-alert marked as sent, a pending address cleared:
+**Another provider:** set `suppression.webhook.parser` to its Symfony parser (for example
+`Symfony\Component\Mailer\Bridge\Postmark\Webhook\PostmarkRequestParser`) and the secret to what it expects.
+Complaints are recorded for any provider; a bounce only when the payload marks it permanent as Resend's does
+(`data.bounce.type`). Amazon SES has no Symfony parser; write a `RequestParserInterface` for it.
+
+### What is recorded
+
+| Event (Symfony name)                                                       | Writes                           |
+|----------------------------------------------------------------------------|----------------------------------|
+| `MailerEngagementEvent::SPAM`                                              | `complained`, keyed on the inbox |
+| `MailerDeliveryEvent::BOUNCE` marked permanent (Resend `data.bounce.type`) | `bounced`, keyed on the spelling |
+| Resend `email.suppressed` (`DROPPED`)                                      | `bounced`, keyed on the spelling |
+| anything else, temporary bounces and `email.failed` included               | nothing                          |
+
+- A complaint blocks every spelling of the inbox (its `canonical()` form): only the inbox's owner can complain. A
+  bounce blocks only its own spelling, so a stranger who types `member+x@corp.example` cannot block
+  `member@corp.example`.
+- A key is lowercase printable ASCII of at most 254 characters with a punycode domain. Any other address is never
+  stored, since a `_ci` collation would match it to its ASCII lookalike; the provider's own list still drops it.
+- Writes are insert-if-absent: a redelivered event changes nothing, and the first reason sticks.
+- An `own_inboxes` entry is blocked like any other.
+
+The webhook:
+
+- Writes only signed events. It answers 401 while the secret is missing or gives a key under 16 bytes; a secret
+  starting `whsec_` (or any secret, for Resend's parser) is base64-decoded strictly after the prefix.
+- Answers 204, with a warning, to a signed event type the parser does not model. A signed Resend bounce, complaint
+  or block the parser cannot read is passed to `report()` and refused, so the provider retries it once the parser is
+  fixed. Any other refusal keeps the parser's status (406). Each refusal logs a warning, at most once per reason every
+  five minutes.
+- When the payload names a sender, ignores (and logs at info) an event from outside `mail.from.address`'s domain and
+  its subdomains.
+- Throws a `LogicException` when it runs, never at boot, while suppression is off, when `symfony/webhook` or the parser
+  is missing, and when an event names a sender while `mail.from.address` is unset (the provider retries for about a
+  day).
+
+### Sending
+
+Every To, Cc and Bcc address, mail notifications included, is checked at send time, so a row added after a mail was
+queued still stops it. A hit drops the whole message and logs the warning `Mail not sent: the address is suppressed.`
+with `email`, `reason` and `subject`. Otherwise the guard answers null and your own `MessageSending` listeners run
+after it; one that runs before it and returns anything but null skips it.
+
+Ask first where a send that silently does not happen would lose something, such as an alert marked as sent:
 
 ```php
 use EmailIntegrity\SuppressedAddress;
@@ -331,94 +247,31 @@ use EmailIntegrity\SuppressionReason;
 
 SuppressedAddress::blocking($user->email);                            // the row that stops mail to it, or null
 SuppressedAddress::blocking(...$admins->pluck('email')->all());       // any of several
+SuppressedAddress::mailable($address);                                // EmailAddress::sendable() and not suppressed
 SuppressedAddress::suppress($address, SuppressionReason::complained); // true for a new row
-SuppressedAddress::lift($address);                                    // the rows deleted
+SuppressedAddress::lift($address);                                    // the number of rows deleted
 ```
 
-A notification to an address `EmailAddress::sendable()` refuses is skipped too. `SuppressedAddress::mailable($address)`
-(since 1.6) means `sendable()` and not suppressed: it is false for a non-string, an unsendable address or a suppressed
-one.
+While suppression is off, `blocking()` answers null without a query. A new row fires Eloquent's `created` event.
 
-To unblock an address:
+To unblock an address, run `php artisan email-integrity:lift someone@example.com`, and remove it from the provider's
+own list too, or the next send comes back as the provider's block and suppresses it again.
 
-```bash
-php artisan email-integrity:lift someone@example.com
-```
+## Unsendable notifications
 
-Remove it from the provider's own suppression list too, or the next send comes back as the provider's block and
-suppresses it again.
+A mail notification routed to an address Symfony Mime cannot build (an imported row without its `@`, a line break) is
+skipped instead of throwing mid-send, and logged at info as `Mail not sent: the address cannot receive mail.` with
+`email` and `notification`. Only the mail channel is skipped; the others still send. The route is read as the mail
+channel reads it: one address or a list, either may be `Name <address>`, or a bare address => name map.
 
-A new row fires Eloquent's `created` event, so `SuppressedAddress::created(fn ($row) => ...)` reacts to it.
-`EmailAddress::bare()` (the address inside `Name <…>`) and `EmailAddress::literal()` (that address lowercased, with a
-punycode domain) are the address rules the keys are built from.
+A notification whose `toMail()` returns a `Mailable` is judged on the notifiable's route, not the `Mailable`'s own
+recipients. A `Mailable` sent with `Mail::to()` is not covered: ask `EmailAddress::sendable()` first.
 
-## Guarantees
+## Translations
 
-- A failed or truncated fetch never replaces the disposable list: nothing is written until every source answers with at
-  least `min_domains` domains, and the write is write-then-rename, so a reader never sees a partial file.
-- The domain is taken from the **last** `@`. Splitting on the first hands you the wrong domain for a quoted local part
-  (`"a@b"@example.com`) — a blocklist bypass using a legal address.
-- Domains are compared in punycode, nontransitional as Symfony Mime sends them: `灵.cc` and `xn--5nx.cc` are one
-  lookup, and `straße.de` stays apart from `strasse.de`.
-- The list is loaded once per request or queued job and cached — O(1) membership, so 75k entries cost nothing per
-  address, and a long-running worker sees the next update.
-- A DNS verdict is cached only when the resolver answered; "could not tell" is never stored.
-- A mail notification routed to any address the send would throw on (an imported row without its `@`, a line break) is
-  skipped instead of throwing mid-send, and logged at info as `Mail not sent: the address cannot receive mail.` with
-  `email` and `notification`. Only its mail channel, named `'mail'` or `MailChannel::class`: the others still send. It
-  reads the route as the mail channel does (one address or a list, either of which may be `Name <address>`, or a bare
-  address => name map), and otherwise answers null, so your own `NotificationSending` listeners still run. Set
-  `skip_unsendable` to `false` to let such a send throw instead. A `Mailable` sent with `Mail::to()` builds its
-  addresses before any event; ask `EmailAddress::sendable()` first.
-- A notification whose `toMail()` returns a `Mailable` is judged on the notifiable's route, not on the `Mailable`'s own
-  recipients, so route such a notification a valid address or none.
-
-Suppression:
-
-| Event (Symfony name)                                                          | Writes                                  |
-|-------------------------------------------------------------------------------|-----------------------------------------|
-| `MailerEngagementEvent::SPAM`                                                 | `complained`, keyed on the inbox        |
-| `MailerDeliveryEvent::BOUNCE` marked permanent (Resend `data.bounce.type`)    | `bounced`, keyed on the spelling        |
-| Resend `email.suppressed` (`DROPPED`; `email.failed` is `DROPPED` too)        | `bounced`, keyed on the spelling        |
-| anything else, temporary bounces and `email.failed` included                  | nothing                                 |
-
-- **A complaint blocks every spelling of the inbox** (its `canonical()` form): only the inbox's owner can complain.
-  **A bounce blocks only the address that bounced**: a stranger who types `member+x@corp.example` into a public form,
-  on a server without `+` tags, cannot block `member@corp.example`.
-- **Only a printable-ASCII key is stored or looked up.** A case-insensitive collation such as `utf8mb4_unicode_ci`
-  treats `ｊａｃｋ@`, `jäck@` and the KELVIN SIGN in `jac\u{212A}@` as `jack@`, so a stranger's bounce on one would
-  block the real inbox. The cost: an SMTPUTF8 mailbox, or a unicode domain without `ext-intl`, is never suppressed
-  here; the provider's own list still drops it.
-  `rekey()` deletes a row whose email has no key, since under such a collation it could still match an ASCII lookalike.
-- Writes are insert-if-absent: a redelivered event changes nothing, and the first reason sticks.
-- Only signed events write. The webhook answers 401 to everything while its secret is missing or gives a key under 16
-  bytes. For Resend, or any secret starting `whsec_`, the key is the base64 after `whsec_`, decoded strictly (Symfony's
-  parser alone accepts events forged with an empty key when the secret is `whsec_` or has a non-base64 tail); for
-  another parser it is the secret itself.
-- A signed event type the parser does not model is answered 204, so the provider does not retry it. A signed Resend
-  bounce, complaint or block the parser cannot read (Symfony's `Invalid date`) is passed to `report()` and refused, so
-  the provider retries it once the parser is fixed. Any other refusal keeps the parser's own status (406), which the
-  provider retries. Each refusal, the 401 included, logs a warning (Laravel never reports the 406), at most once per
-  reason every five minutes, since anyone can post to the URL.
-- Misconfiguration is checked when the webhook runs, never at boot, so `artisan` and CI keep working: it throws a
-  `LogicException` naming the `composer require` to run when `symfony/webhook` or the configured parser is missing or
-  is not a `RequestParserInterface`, when `suppression.enabled` is off, and when an event names a sender while
-  `mail.from.address` is unset (a reported 500; the provider retries for about a day, so set it before then or replay
-  the failed messages).
-- The parser reads the raw body, so `TrimStrings` and `ConvertEmptyStringsToNull` cannot change what the signature
-  covers.
-- When the payload names a sender, an event from another sending domain (neither `mail.from.address`'s domain nor a
-  subdomain of it; `evil-example.com` is not `example.com`) is ignored and logged at info. One provider account often
-  sends for several domains.
-- The guard checks every To, Cc and Bcc address at send time, so a row added after a mail was queued still stops it.
-  A hit drops the whole message and logs `Mail not sent: the address is suppressed.` (warning, with `email`, `reason`
-  and `subject`). Otherwise it answers null, so your own `MessageSending` listeners still run, after it. Mail
-  notifications pass the same event. A `MessageSending` listener that runs before the guard and returns anything but
-  null skips it, so return nothing from your own.
-- A block on one of `own_inboxes` is passed to `report()`, naming the address and the reason. The inbox is blocked like
-  any other: the provider skips it anyway.
-- Off, `blocking()` answers null before touching the table, so the guard, `NotSuppressed` and your own checks all
-  pass.
+The package ships en, fr, ar and es: `email-integrity::messages.disposable`, `unroutable` and `suppressed`. To reword
+one, put only that key in `lang/vendor/email-integrity/{locale}/messages.php`; the others keep the package's lines.
+Add a language the same way, with every key.
 
 ## Testing your app
 
@@ -429,7 +282,8 @@ Suppression:
 
   ```php
   $body = json_encode($payload);
-  $signature = base64_encode(hash_hmac('sha256', "{$id}.{$timestamp}.{$body}", $key, true)); // $key: base64-decoded secret
+  // $key: the secret after `whsec_`, base64-decoded
+  $signature = base64_encode(hash_hmac('sha256', "{$id}.{$timestamp}.{$body}", $key, true));
 
   $this->call('POST', '/email-integrity/webhook', server: [
       'CONTENT_TYPE' => 'application/json',
@@ -441,57 +295,25 @@ Suppression:
 
 ## Upgrading
 
-### From 1.5
+### From 1.x
 
-1.6 adds `unclaimed_mailbox` (`UnclaimedMailbox`) and `SuppressedAddress::mailable()`; nothing to change. If you
-followed the old keep-as-typed advice (`unique:users,email_canonical`), switch to `unclaimed_mailbox:users`, or
-`UnclaimedMailbox` with `ignore()` on a form that updates an account: an alias spelling passed the old rule and then hit
-the unique index.
-
-### From 1.4
-
-1.5 adds `skip_unsendable`; a config published before it has none and keeps the skip.
-
-Since 1.4.2 a published `disposable`, `host` or `suppression` group keeps the defaults of the keys it leaves out, instead
-of dropping them; a list you set still replaces the default whole. The exception: a `suppression.webhook` group without
-`path`, as published from 1.1, registers no route, as through 1.4.1. Only 1.4.2 routed `email-integrity/webhook` for it,
-beside your own route; if your provider posts there, set `path` to it.
-
-### From 1.3
-
-Nothing to change. Webhook refusal warnings now log at most once per reason every five minutes.
-
-### From 1.2
-
-The package now schedules `email-integrity:update` daily at 03:00. Delete your own `Schedule::command(...)` entry, or the
-list is fetched twice a day; to keep your own time instead, set `schedule` to `false` in the published config.
-
-A mail notification to an address the send would throw on is now skipped and logged instead of throwing
-`RfcComplianceException` (or Laravel's `InvalidArgumentException` on a line break); nothing to change. Your own check before such a send can go, or become
-`EmailAddress::sendable()` where you still need the answer.
-
-### From 1.1
-
-The package now registers the suppression webhook and its rate limit. A config published from 1.1 has no
-`suppression.webhook.path`, so no route is registered until you add `path`; keep your own route until then. Set `path`
-(and `domain` if needed) to the URL your app already uses, then delete your own route and rate limiter. The route name
-becomes `email-integrity.webhook`.
-
-### From 1.0
-
-No API breaks, and suppression stays off until you turn it on. Stored canonical values for some domains change:
-
-- **Nontransitional IDNA.** `straße.de` now becomes `xn--strae-oqa.de`, as it is sent, instead of folding onto
-  `strasse.de`, a different domain. Recompute stored `canonical()` values whose domain holds `ß`, `ς` or a zero-width
-  joiner or non-joiner — rerun the backfill above for rows whose domain is not ASCII.
-- **Collation.** Check the identity column's collation against [Collation](#collation).
-- **`disposable.min_domains` applies to each source**, as its comment always said, not to the merged total. A small
-  extra source belongs in `deny` instead.
-- **`EmailIntegrity::canonical()` is deprecated**; `EmailAddress::canonical()` is the same rule. It goes in 2.0.
-- `disposable.cache.key` is no longer read; delete it from a published config.
-- **The `symfony/resend-mailer` conflict applies even with suppression off.** The package now conflicts with
-  `<7.4.18 || >=8.0,<8.1.6`, so an app that sends through Resend on an older bridge must raise it, or Composer refuses 1.1.
-- **`UpdateDisposableDomainsCommand` is `@internal`.** Schedule it by name, `'email-integrity:update'`, not by class.
+- `EmailIntegrity::canonical()` is gone; call `EmailAddress::canonical()`.
+- `skip_unsendable` is gone: a mail notification the send would throw on is always skipped. Delete the key from a
+  published config.
+- `disposable.cache` is no longer read: the list loads from `disposable.storage` once per request or job. Delete the
+  group from a published config.
+- A published `suppression.webhook` group without `path` now gets the default `email-integrity/webhook` while
+  suppression is on. Set `path` to null to route `SuppressionWebhook` yourself.
+- The package now ships fr, ar and es, so those languages read its lines where your app has none. In your
+  `lang/vendor/email-integrity/{fr,ar,es}/messages.php`, delete the keys you don't reword on purpose, and a file left
+  empty.
+- `unclaimed_mailbox` checks only the canonical column: a row whose `email_canonical` is NULL no longer holds its exact
+  address. While you keep such rows, refuse that address with your own rule.
+- `UnclaimedMailbox` drops its `$email` argument and `unclaimed_mailbox` its `{email_column}` parameter, so
+  `{ignore_id}` is now the third: `unclaimed_mailbox:users,email_canonical,email,5` becomes
+  `unclaimed_mailbox:users,email_canonical,5`.
+- `SuppressedAddress::rekey()` is gone. Where you call it, copy its two passes (built on `SuppressedAddress::key()`)
+  from 1.x: delete each row with no key, then rewrite each row to its key, deleting one whose key another row holds.
 
 ## Development
 

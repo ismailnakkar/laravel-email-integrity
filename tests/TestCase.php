@@ -16,7 +16,7 @@ abstract class TestCase extends BaseTestCase
 
     protected function defineDatabaseMigrations(): void
     {
-        // The publish-only stub, run here so the suite exercises the schema new apps get.
+        // Publish-only in apps; loaded here so the suite runs the shipped schema.
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
     }
 
@@ -28,7 +28,6 @@ abstract class TestCase extends BaseTestCase
         $this->beforeApplicationDestroyed(fn () => @unlink($path));
 
         config(['email-integrity.disposable.storage' => $path]);
-        config(['email-integrity.disposable.cache.enabled' => false]);
 
         return $path;
     }

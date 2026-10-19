@@ -45,7 +45,6 @@ class UpdateTest extends TestCase
         $this->assertSame(['one.test', 'two.test'], json_decode((string)file_get_contents($this->path), true));
     }
 
-    /** A truncated source must never quietly replace a good list with a shorter one. */
     public function test_a_short_list_is_refused_and_the_previous_one_survives(): void
     {
         Http::fake(['list.test/*' => Http::response(['only-one.test'])]);
@@ -76,7 +75,6 @@ class UpdateTest extends TestCase
         }
     }
 
-    /** Checked per source: a truncated second list would otherwise shrink the merged one without failing. */
     public function test_a_short_source_is_refused_even_when_the_total_clears_the_floor(): void
     {
         config(['email-integrity.disposable.sources' => ['https://list.test/a.json', 'https://list.test/b.json']]);

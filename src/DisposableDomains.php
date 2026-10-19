@@ -4,30 +4,17 @@ declare(strict_types=1);
 
 namespace EmailIntegrity;
 
-use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
-/**
- * The disposable-domain list: fetch, store, look up.
- *
- * Lookups are a hash-set membership test, so the 74k-entry list costs one load and
- * O(1) per address. The set is keyed on the domain itself; subdomain coverage is the
- * caller's job via EmailAddress::listedIn, because only the configured lists want it —
- * the fetched list is already exhaustive at the level it publishes.
- */
+/** The fetched list, matched exactly: it names every domain it blocks. */
 class DisposableDomains
 {
-    private const CACHE_KEY = 'email-integrity:disposable-domains';
-
     /** @var array<string, true>|null */
     private ?array $domains = null;
 
-    public function __construct(
-        private readonly Config $config,
-        private readonly CacheFactory $cache,
-    ) {}
+    public function __construct(private readonly Config $config) {}
 
     public function contains(string $domain): bool
     {
@@ -37,33 +24,12 @@ class DisposableDomains
     /** @return array<string, true> */
     public function all(): array
     {
-        if ($this->domains !== null) {
-            return $this->domains;
-        }
-
-        $cache = $this->config->get('email-integrity.disposable.cache');
-
-        if (! ($cache['enabled'] ?? true)) {
-            return $this->domains = $this->loadFromStorage();
-        }
-
-        // Null, not [], for an empty list: the cache treats null as a miss, so a list
-        // file that is not there yet cannot be remembered as "nothing is disposable".
-        return $this->domains = $this->cache->store($cache['store'] ?? null)->remember(
-            self::CACHE_KEY,
-            $cache['ttl'] ?? 86400,
-            fn (): ?array => $this->loadFromStorage() ?: null,
-        ) ?? [];
+        return $this->domains ??= $this->loadFromStorage();
     }
 
     /**
-     * Fetches every source and writes the merged list.
-     *
-     * Nothing is written until every source has answered with at least `min_domains`:
-     * a half-fetched list that silently admits throwaway addresses is worse than
-     * yesterday's list, so a failure leaves the old file untouched.
-     *
-     * @return int The number of domains written.
+     * Writes the merged sources and returns the domain count. Throws, keeping the old file, unless every source
+     * returns `min_domains`: a partial list would silently admit throwaways.
      */
     public function update(): int
     {
@@ -98,12 +64,6 @@ class DisposableDomains
     public function flush(): void
     {
         $this->domains = null;
-
-        $cache = $this->config->get('email-integrity.disposable.cache');
-
-        if ($cache['enabled'] ?? true) {
-            $this->cache->store($cache['store'] ?? null)->forget(self::CACHE_KEY);
-        }
     }
 
     /** @return array<int, mixed> */
@@ -111,7 +71,7 @@ class DisposableDomains
     {
         $domains = Http::timeout($timeout)->get($url)->throw()->json();
 
-        // Per source: a truncated second list would otherwise shrink the merged one without failing.
+        // Per source: a truncated second list would otherwise shrink the merged one silently.
         if (! is_array($domains) || $domains === [] || count($domains) < $minimum) {
             throw new RuntimeException(sprintf('The disposable-domains source returned no usable list of %d domains: %s', $minimum, $url));
         }
@@ -130,7 +90,7 @@ class DisposableDomains
 
         $decoded = json_decode((string)file_get_contents($path), true);
 
-        // update() wrote it normalised.
+        // Normalised by update().
         return is_array($decoded) ? array_fill_keys(array_filter($decoded, is_string(...)), true) : [];
     }
 

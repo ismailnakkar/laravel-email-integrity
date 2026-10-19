@@ -7,7 +7,7 @@ namespace EmailIntegrity;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository as Config;
 
-/** Is the domain a throwaway, and can it receive mail at all: both about the domain, never the mailbox. */
+/** Domain checks only: neither proves the mailbox exists. */
 class EmailIntegrity
 {
     private const RESOLVER_DOWN = 'email-integrity:resolver-down';
@@ -23,18 +23,7 @@ class EmailIntegrity
         return (bool)$this->config->get('email-integrity.enabled', true);
     }
 
-    /** @deprecated Use EmailAddress::canonical(); removed in 2.0. */
-    public function canonical(mixed $email): ?string
-    {
-        return EmailAddress::canonical($email);
-    }
-
-    /**
-     * True when the address should be refused as a throwaway.
-     *
-     * The allowlist wins over both the fetched list and your own denylist, so an
-     * over-broad upstream entry is a config edit rather than a release.
-     */
+    /** True for a domain on `deny` or the fetched list, unless `allow` covers it. False while disabled. */
     public function isDisposable(mixed $email): bool
     {
         $domain = EmailAddress::domainOf($email);
@@ -52,11 +41,8 @@ class EmailIntegrity
     }
 
     /**
-     * True when the domain can receive mail — an MX record, or an A/AAAA record, which
-     * RFC 5321 §5.1 makes an implicit mail destination.
-     *
-     * Returns the `fail_open` value when the resolver is unreachable, so a DNS outage
-     * does not become a signup outage.
+     * True when the domain has an MX, or an A/AAAA (RFC 5321 §5.1's implicit MX); `fail_open` when the resolver is
+     * unreachable. True without a domain, while disabled, or for an `allow` entry.
      */
     public function hostResolves(mixed $email): bool
     {
@@ -72,21 +58,17 @@ class EmailIntegrity
             return true;
         }
 
-        // An allowlisted domain is trusted by decision; do not spend a lookup on it.
         if (EmailAddress::listedIn($domain, (array)$this->config->get('email-integrity.allow', []))) {
             return true;
         }
 
-        // TTL 0 makes the cache forget rather than store, so a "could not tell" never
-        // persists — a ten-second blip would otherwise pin a wrong verdict for the hour.
+        // TTL 0 stores nothing, so a resolver blip is never cached as a verdict.
         $ttl = fn (?bool $answer): int => $answer === null ? 0 : (int)($host['cache_ttl'] ?? 3600);
 
         $store = $this->cache->store();
 
         $resolved = $store->remember(
-            // Hashed because the domain is attacker-chosen and unbounded: a 247-character
-            // one clears `max:255` and `email:strict`, and Laravel's default cache store is
-            // `database`, whose key column is a varchar(255) primary key.
+            // Hashed: a 247-character domain passes `max:255`, and the database cache store's key is a varchar(255).
             'email-integrity:host:' . hash('xxh128', $domain),
             $ttl,
             fn (): ?bool => $store->has(self::RESOLVER_DOWN) ? null : $this->resolve($domain),
@@ -95,11 +77,10 @@ class EmailIntegrity
         return $resolved ?? (bool)($host['fail_open'] ?? true);
     }
 
-    /** True or false when the resolver answered, null when it could not be reached. */
+    /** Null when the resolver could not be reached. */
     private function resolve(string $domain): ?bool
     {
-        // checkdnsrr() calls RFC 7505's null MX (`MX 0 .`) a live MX. Read the record
-        // instead; dns_get_record strips the root label, leaving an empty target.
+        // Not checkdnsrr(): it counts RFC 7505's null MX (`MX 0 .`) as live. dns_get_record() gives it an empty target.
         $mx = array_column(@dns_get_record($domain, DNS_MX) ?: [], 'target');
 
         if ($mx !== []) {
@@ -112,8 +93,7 @@ class EmailIntegrity
             }
         }
 
-        // "No such record" and "resolver unreachable" look identical from here, so probe
-        // a name that must exist to tell them apart.
+        // A name that must exist tells "no such record" from "resolver unreachable".
         if (@checkdnsrr('a.root-servers.net', 'A')) {
             return false;
         }

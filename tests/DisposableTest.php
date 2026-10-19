@@ -6,7 +6,6 @@ namespace EmailIntegrity\Tests;
 
 use EmailIntegrity\DisposableDomains;
 use EmailIntegrity\EmailIntegrity;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 class DisposableTest extends TestCase
@@ -29,7 +28,6 @@ class DisposableTest extends TestCase
         $this->assertTrue($this->integrity()->isDisposable('someone@mailinator.com'));
     }
 
-    /** The whole point: the Gmail typo-squat is a live catch-all, so verification alone misses it. */
     public function test_a_typo_squat_on_the_list_is_disposable(): void
     {
         $this->assertTrue($this->integrity()->isDisposable('rober3851@gmai.com'));
@@ -45,10 +43,6 @@ class DisposableTest extends TestCase
         $this->assertTrue($this->integrity()->isDisposable('Someone@MailiNator.CoM.'));
     }
 
-    /**
-     * A quoted local part may contain '@'. Splitting on the first one yields
-     * "b"@example.com -> b"@example.com, and the blocklist silently misses.
-     */
     public function test_a_quoted_local_part_does_not_hide_the_domain(): void
     {
         $this->assertTrue($this->integrity()->isDisposable('"weird@address"@mailinator.com'));
@@ -93,7 +87,6 @@ class DisposableTest extends TestCase
         $this->assertFalse($this->integrity()->isDisposable('someone@mailinator.com'));
     }
 
-    /** Shape is the `email` rule's complaint; this one must not double up on it. */
     public function test_an_unreadable_address_is_not_reported_as_disposable(): void
     {
         $this->assertFalse($this->integrity()->isDisposable('no-at-sign'));
@@ -102,14 +95,6 @@ class DisposableTest extends TestCase
         $this->assertFalse($this->integrity()->isDisposable(['an', 'array']));
     }
 
-    /**
-     * The lists publish `xn--` only. Converting at the DNS call was too late: the list
-     * lookup had already missed, so the unicode spelling of a listed domain walked past.
-     *
-     * Both sides need the same pass: the lookup now asks about `xn--5nx.cc`, so an allow
-     * or deny entry typed in unicode has to reach it too. An `allow` that silently misses
-     * is a real user refused.
-     */
     public function test_a_unicode_domain_does_not_dodge_a_punycode_entry(): void
     {
         if (! function_exists('idn_to_ascii')) {
@@ -133,11 +118,6 @@ class DisposableTest extends TestCase
         $this->assertFalse($this->integrity()->isDisposable('a@[192.0.2.1]'));
     }
 
-    /**
-     * checkdnsrr() and dns_get_record() throw a ValueError on a NUL byte, and `@` suppresses
-     * diagnostics but not Errors — so without the guard this is an uncaught 500 from a form
-     * field, reachable through the documented facade call as well as the rule.
-     */
     public function test_a_nul_byte_in_the_domain_is_refused_before_it_reaches_the_resolver(): void
     {
         config(['email-integrity.host.enabled' => true, 'email-integrity.host.fail_open' => false]);
@@ -146,7 +126,6 @@ class DisposableTest extends TestCase
         $this->assertFalse($this->integrity()->isDisposable("a@mailinator\0.com"));
     }
 
-    /** A queue worker or Octane outlives one request, so a refreshed list must reach it at the next job. */
     public function test_the_list_is_reloaded_for_each_job_or_request(): void
     {
         $this->assertFalse($this->integrity()->isDisposable('a@fresh.test'));
@@ -157,20 +136,9 @@ class DisposableTest extends TestCase
         $this->assertTrue($this->integrity()->isDisposable('a@fresh.test'));
     }
 
-    /** A missing file is never cached as "nothing is disposable", and an update replaces what the cache holds. */
-    public function test_the_cache_holds_only_a_real_list_and_an_update_replaces_it(): void
+    public function test_an_update_replaces_the_loaded_list(): void
     {
-        unlink($path = $this->withDisposableList([]));
-        config(['email-integrity.disposable.cache.enabled' => true]);
-
-        $this->assertFalse($this->integrity()->isDisposable('a@mailinator.com'));
-        $this->assertFalse(Cache::has('email-integrity:disposable-domains'));
-
-        file_put_contents($path, json_encode(['mailinator.com']));
-        $this->app->forgetScopedInstances();
-
         $this->assertTrue($this->integrity()->isDisposable('a@mailinator.com'));
-        $this->assertTrue(Cache::has('email-integrity:disposable-domains'));
 
         config(['email-integrity.disposable.sources' => ['https://list.test/domains.json'], 'email-integrity.disposable.min_domains' => 1]);
         Http::fake(['list.test/*' => Http::response(['fresh.test'])]);

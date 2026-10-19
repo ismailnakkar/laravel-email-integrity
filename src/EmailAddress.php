@@ -7,17 +7,11 @@ namespace EmailIntegrity;
 use InvalidArgumentException;
 use Symfony\Component\Mime\Address;
 
-/**
- * Domain extraction, kept in one place because getting it wrong is silent.
- *
- * Splitting on the FIRST `@` hands you the wrong domain for a quoted local part
- * (`"a@b"@example.com`), which is how a blocklist gets bypassed by a legal address.
- */
 final class EmailAddress
 {
     private function __construct() {}
 
-    /** Null when there is no usable domain — the `email` rule owns that complaint, not this one. */
+    /** Lowercase, punycode, no trailing dot. Null without a usable domain, which the `email` rule reports. */
     public static function domainOf(mixed $email): ?string
     {
         if (! is_string($email)) {
@@ -25,6 +19,7 @@ final class EmailAddress
         }
 
         $email = mb_strtolower(trim($email));
+        // The last `@`: a quoted local part may hold one (`"a@b"@example.com`), and the first would bypass the lists.
         $at = mb_strrpos($email, '@');
 
         if ($at === false || $at === mb_strlen($email) - 1) {
@@ -33,15 +28,12 @@ final class EmailAddress
 
         $domain = mb_substr($email, $at + 1);
 
-        // An address literal ([192.0.2.1], [IPv6:...]) has no domain to match a list against,
-        // and a NUL byte is not a hostname either: dns_get_record() and checkdnsrr() throw a
-        // ValueError on one, which `@` does not suppress, so it would surface as a 500.
+        // An address literal has no domain; a NUL byte makes the DNS functions throw a ValueError `@` cannot hide.
         if (str_starts_with($domain, '[') || str_contains($domain, "\0")) {
             return null;
         }
 
-        // A trailing dot is the same domain, fully qualified. Normalise so the
-        // list lookup and the DNS query agree.
+        // A trailing dot names the same domain.
         $domain = rtrim($domain, '.');
 
         if ($domain === '') {
@@ -51,12 +43,7 @@ final class EmailAddress
         return self::ascii($domain);
     }
 
-    /**
-     * Punycode: `灵.cc` and `xn--5nx.cc` are one DNS name and the lists publish only the
-     * second, so converting at the DNS call was too late — the list lookup had already
-     * missed. A no-op on ASCII. Falls back to the typed spelling on a malformed domain
-     * and without ext-intl, which is the pre-existing miss rather than a new one.
-     */
+    /** Punycode, as the lists publish it (`灵.cc` is `xn--5nx.cc`). As typed without ext-intl or when malformed. */
     private static function ascii(string $domain): string
     {
         if (! function_exists('idn_to_ascii')) {
@@ -91,9 +78,7 @@ final class EmailAddress
             $local = mb_substr($local, 0, $tag);
         }
 
-        // googlemail.com IS gmail.com: one MX, one mailbox. Folded here and not in
-        // domainOf, because that answers "which DNS name" — where the two are separate
-        // names an allow/deny entry can address — while this answers "which inbox".
+        // One inbox under two domains. Not folded in domainOf(): an allow or deny entry may name either.
         if ($domain === 'googlemail.com') {
             $domain = 'gmail.com';
         }
@@ -106,18 +91,15 @@ final class EmailAddress
     }
 
     /**
-     * The text inside a closing `<…>`, trimmed: providers echo the header, `Name <address>`. Only a closing one, since
-     * a bare address never ends in `>` but its quoted local part may hold `<victim@…>`.
+     * The address inside a trailing `<…>` (providers send `Name <address>`), trimmed. Trailing only: a quoted local
+     * part may hold `<victim@…>`.
      */
     public static function bare(string $address): string
     {
         return trim(preg_match('/<([^<>]+)>\s*$/', $address, $match) === 1 ? $match[1] : $address);
     }
 
-    /**
-     * The mailbox exactly as it was addressed: bare, lowercased, the domain in punycode. Unlike canonical() it folds
-     * no tag and no dot, so it names this one spelling. Null without a local part or a usable domain.
-     */
+    /** Bare, lowercased, punycode domain, nothing folded. Null without a local part or domain. */
     public static function literal(string $address): ?string
     {
         $address = self::bare($address);
@@ -127,7 +109,7 @@ final class EmailAddress
         return $domain === null || $local === '' ? null : $local . '@' . $domain;
     }
 
-    /** strtolower, not mb_: mb folds U+212A KELVIN SIGN onto `k`, handing a stranger's jac\u{212A}@ the owner's jack@. */
+    /** strtolower, not mb_: mb folds U+212A KELVIN SIGN onto `k`, giving a stranger the owner's jack@. */
     private static function local(string $address): string
     {
         $address = trim($address);
@@ -136,9 +118,8 @@ final class EmailAddress
     }
 
     /**
-     * True when a message can be addressed to it: Symfony Mime's own Address, which the send would otherwise throw on
-     * (an imported row may lack its `@`). A bare address, not `Name <…>`. Laravel refuses a line break, which Symfony
-     * would trim off the end.
+     * True when Symfony Mime's Address accepts it, so a send would not throw. A bare address, not `Name <…>`. A line
+     * break fails: Laravel refuses one that Symfony would trim.
      */
     public static function sendable(mixed $email): bool
     {
@@ -158,8 +139,7 @@ final class EmailAddress
     /** True when `$domain` is the entry itself or a subdomain of it. */
     public static function coveredBy(string $domain, string $entry): bool
     {
-        // Same punycode pass as domainOf, or an entry typed as `灵.cc` would never match
-        // the `xn--5nx.cc` the lookup now asks about.
+        // Normalised as domainOf() does, so an entry typed `灵.cc` matches `xn--5nx.cc`.
         $entry = self::ascii(rtrim(mb_strtolower(trim($entry)), '.'));
 
         return $entry !== '' && ($domain === $entry || str_ends_with($domain, '.' . $entry));

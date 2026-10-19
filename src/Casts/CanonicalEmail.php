@@ -29,8 +29,7 @@ final readonly class CanonicalEmail implements CastsAttributes
      */
     public function set(Model $model, string $key, mixed $value, array $attributes): array
     {
-        // A quoted or empty local part has no provable identity, so fall back to the
-        // address as typed: unique on something beats a NULL the index will not police.
+        // No canonical form: the address as typed, as a unique index lets any number of NULLs through.
         return [
             $key          => $value,
             $this->column => EmailAddress::canonical($value) ?? (is_string($value) ? $value : null),

@@ -21,7 +21,6 @@ class SendGuardTest extends TestCase
         $app['config']->set('email-integrity.suppression.enabled', true);
     }
 
-    /** @return int Messages the transport accepted. */
     private function sent(): int
     {
         return $this->app->make('mailer')->getSymfonyTransport()->messages()->count();
@@ -42,7 +41,6 @@ class SendGuardTest extends TestCase
         ]);
     }
 
-    /** It answers null, not true: any other answer would stop the app's own MessageSending listeners. */
     public function test_a_mailable_message_reaches_the_other_listeners(): void
     {
         $seen = 0;
@@ -56,7 +54,6 @@ class SendGuardTest extends TestCase
         $this->assertSame(1, $this->sent());
     }
 
-    /** A stranger's `+` bounce names only its own spelling, so the member's own address still gets mail. */
     public function test_a_tagged_bounce_leaves_the_untagged_address_mailable(): void
     {
         SuppressedAddress::suppress('member+x@corp.example', SuppressionReason::bounced);
@@ -66,7 +63,6 @@ class SendGuardTest extends TestCase
         $this->assertSame(1, $this->sent());
     }
 
-    /** One switch for the guard, NotSuppressed and the app's own pre-checks, and no query while it is off. */
     public function test_blocking_and_the_guard_are_inert_while_suppression_is_off(): void
     {
         SuppressedAddress::suppress('dead@example.com', SuppressionReason::bounced);
@@ -80,7 +76,6 @@ class SendGuardTest extends TestCase
         $this->assertSame([], DB::getQueryLog());
     }
 
-    /** The provider skips its listed addresses anyway; the row has to go from both lists. */
     public function test_lift_unblocks_the_address_and_says_to_clear_the_provider_too(): void
     {
         SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::complained);

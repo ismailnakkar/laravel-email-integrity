@@ -22,11 +22,9 @@ class SuppressedAddress extends Model
     protected $fillable = ['email', 'reason'];
 
     /**
-     * The row key for an address. Only the inbox's owner can complain, so a complaint keys the inbox and blocks every
-     * spelling; a bounce can follow a stranger's typo (`member+x@` on a server without tags), so it keys the spelling.
-     * Null when there is nothing to key, the key cannot be an address (RFC 5321 caps it at 254), it holds anything but
-     * printable ASCII (a `_ci` collation folds `ｊａｃｋ@`, `jäck@` and the KELVIN SIGN onto `jack@`), or it ends in a
-     * space (MariaDB pads spaces when it compares, so `jack@example.com ` would block `jack@example.com`).
+     * A complaint keys the inbox (only its owner can complain); a bounce keys the spelling, as it may follow a
+     * stranger's typo. Null for no address, over 254 characters (RFC 5321), outside printable ASCII (a `_ci` collation
+     * folds `ｊａｃｋ@`, `jäck@` and KELVIN SIGN onto `jack@`), or ending in a space (MariaDB ignores it when comparing).
      */
     public static function key(string $address, SuppressionReason $reason): ?string
     {
@@ -37,10 +35,12 @@ class SuppressedAddress extends Model
         return $key !== null && preg_match('/^[\x20-\x7E]{0,253}[\x21-\x7E]$/D', $key) === 1 ? $key : null;
     }
 
-    /** The row that stops mail to any of the addresses: a complaint on its inbox, or a bounce on its spelling. */
+    /**
+     * The row that stops mail to any of the addresses: a complaint on its inbox, or a bounce on its spelling. Null,
+     * with no query, while suppression is off.
+     */
     public static function blocking(string ...$addresses): ?self
     {
-        // The one switch: the send guard, NotSuppressed and the app's own checks all pass while it is off.
         if (! config('email-integrity.suppression.enabled')) {
             return null;
         }
@@ -48,10 +48,7 @@ class SuppressedAddress extends Model
         return self::query()->whereIn('email', self::keys(...$addresses))->first();
     }
 
-    /**
-     * EmailAddress::sendable() and not suppressed: whether mail to $address gets through. Not Laravel's `Mailable`.
-     * A non-string is false, never a TypeError.
-     */
+    /** EmailAddress::sendable() and not suppressed; false for a non-string. Unrelated to Laravel's `Mailable`. */
     public static function mailable(mixed $address): bool
     {
         return EmailAddress::sendable($address) && self::blocking($address) === null;
@@ -88,55 +85,13 @@ class SuppressedAddress extends Model
         return self::query()->whereIn('email', self::keys($address))->delete();
     }
 
-    /**
-     * Deletes each row with no key, logged as a warning: under a case- and accent-insensitive collation it could match
-     * an ASCII lookalike. Then rewrites each row to its key; a row whose key another row already holds is deleted, as
-     * the database's own collation sees it. Rewriting keeps the row's timestamps. Returns the rows changed.
-     */
-    public static function rekey(): int
-    {
-        $changed = 0;
-
-        // Keyless rows first: left for later, `ｊｄｏｅ@` would pass for the holder of `jdoe@` below and take the real row
-        // down with it.
-        foreach (self::query()->lazyById() as $row) {
-            if (self::key($row->email, $row->reason) === null) {
-                Log::warning('Suppressed address with no key deleted.', ['email' => $row->email, 'reason' => $row->reason->value]);
-                $row->delete();
-                $changed++;
-            }
-        }
-
-        foreach (self::query()->lazyById() as $row) {
-            $key = self::key($row->email, $row->reason);
-
-            if ($key === $row->email) {
-                continue;
-            }
-
-            if (self::query()->where('email', $key)->whereKeyNot($row->getKey())->exists()) {
-                $row->delete();
-            } else {
-                self::query()->toBase()->where('id', $row->getKey())->update(['email' => $key]);
-            }
-
-            $changed++;
-        }
-
-        return $changed;
-    }
-
     /** @return array<string, string> */
     protected function casts(): array
     {
         return ['reason' => SuppressionReason::class];
     }
 
-    /**
-     * Both keys of each address: the spelling a bounce row holds and the inbox a complaint row holds.
-     *
-     * @return list<string>
-     */
+    /** @return list<string> */
     private static function keys(string ...$addresses): array
     {
         $keys = [];
