@@ -295,6 +295,12 @@ Add a language the same way, with every key.
 
 ## Upgrading
 
+### From 2.0
+
+2.1 rewords `suppressed` in every language to say why the address is refused and what to do. Nothing to change but
+a test that asserts the old line. A `suppressed` key in your `lang/vendor/email-integrity/{locale}/messages.php` still
+wins; delete it to read the package's line.
+
 ### From 1.x
 
 - `EmailIntegrity::canonical()` is gone; call `EmailAddress::canonical()`.

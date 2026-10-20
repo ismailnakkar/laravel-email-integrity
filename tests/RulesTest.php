@@ -167,7 +167,7 @@ class RulesTest extends TestCase
         $validator = Validator::make(['email' => 'janedoe+new@gmail.com'], ['email' => [new NotSuppressed]]);
 
         $this->assertFalse($validator->passes());
-        $this->assertSame('This email address cannot receive our mail.', $validator->errors()->first('email'));
+        $this->assertSame('Mail to this address has bounced or been reported as spam. Please use an address you can receive mail at.', $validator->errors()->first('email'));
         $this->assertTrue($this->validate('someone@gmail.com', [new NotSuppressed]));
     }
 
@@ -179,7 +179,7 @@ class RulesTest extends TestCase
         $validator = Validator::make(['email' => 'janedoe+new@gmail.com'], ['email' => 'bail|email:strict|not_suppressed']);
 
         $this->assertFalse($validator->passes());
-        $this->assertSame('This email address cannot receive our mail.', $validator->errors()->first('email'));
+        $this->assertSame('Mail to this address has bounced or been reported as spam. Please use an address you can receive mail at.', $validator->errors()->first('email'));
         $this->assertTrue($this->validate('someone@gmail.com', ['not_suppressed']));
     }
 }
