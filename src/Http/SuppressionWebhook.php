@@ -27,6 +27,8 @@ use Symfony\Component\Webhook\Exception\RejectWebhookException;
 /** Suppresses the recipients of a complaint, a permanent bounce or the provider's block, as the parser reads them. */
 final class SuppressionWebhook
 {
+    private const PERMANENT_BOUNCE = 'permanent';
+
     public function __invoke(Request $request): Response
     {
         $parser = $this->parser();
@@ -44,8 +46,10 @@ final class SuppressionWebhook
             $events = Arr::wrap($parser->parse(new SymfonyRequest(server: $request->server->all(), content: $request->getContent()), $secret));
         } catch (RejectWebhookException $e) {
             if ($e->getPrevious() instanceof ParseException) {
+                $type = $request->json('type');
+
                 // Signed, but a type the parser does not model: answered, or the provider retries it for days.
-                if (! in_array($request->json('type'), ['email.bounced', 'email.complained', 'email.suppressed'], true)) {
+                if (! is_string($type) || ResendEvent::tryFrom($type) === null) {
                     Log::warning('Mail provider event the parser does not model ignored.', ['reason' => $e->getMessage()]);
 
                     return response()->noContent();
@@ -172,12 +176,13 @@ final class SuppressionWebhook
 
         $payload = $event->getPayload();
         $bounce = Arr::get($payload, 'data.bounce.type');
+        $type = Arr::get($payload, 'type');
 
         return match ($event->getName()) {
             // Permanent only: a full mailbox must not lock anyone out of a password reset.
-            MailerDeliveryEvent::BOUNCE => is_string($bounce) && strcasecmp($bounce, 'permanent') === 0 ? SuppressionReason::bounced : null,
+            MailerDeliveryEvent::BOUNCE => is_string($bounce) && strcasecmp($bounce, self::PERMANENT_BOUNCE) === 0 ? SuppressionReason::bounced : null,
             // Resend's own block; `email.failed`, the other DROPPED, is a quota and blocks nothing.
-            MailerDeliveryEvent::DROPPED => Arr::get($payload, 'type') === 'email.suppressed' ? SuppressionReason::bounced : null,
+            MailerDeliveryEvent::DROPPED => is_string($type) && ResendEvent::tryFrom($type) === ResendEvent::suppressed ? SuppressionReason::bounced : null,
             default                      => null,
         };
     }
