@@ -14,7 +14,6 @@ return new class extends Migration
             $table->id();
             $table->string('email', 254)->unique();
             $table->string('reason', 20);
-            // datetimes(), not timestamps(): a MySQL TIMESTAMP ends in 2038, and a row lives until it is lifted.
             $table->datetimes();
         });
     }
