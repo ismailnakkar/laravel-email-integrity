@@ -9,27 +9,28 @@ use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 /** The fetched list, matched exactly: it names every domain it blocks. */
-class DisposableDomains
+final class DisposableDomains
 {
     /** @var array<string, true>|null */
     private ?array $domains = null;
 
     public function __construct(private readonly Config $config) {}
 
+    /**
+     * Exact, on a normalised domain, and blind to `allow` and `deny`: ask EmailIntegrity::isDisposable().
+     *
+     * @internal
+     */
     public function contains(string $domain): bool
     {
         return isset($this->all()[$domain]);
     }
 
-    /** @return array<string, true> */
-    public function all(): array
-    {
-        return $this->domains ??= $this->loadFromStorage();
-    }
-
     /**
      * Writes the merged sources and returns the domain count. Throws, keeping the old file, unless every source
-     * returns `min_domains`: a partial list would silently admit throwaways.
+     * returns `min_domains`: a partial list would silently admit throwaways. Run it through `email-integrity:update`.
+     *
+     * @internal
      */
     public function update(): int
     {
@@ -61,9 +62,16 @@ class DisposableDomains
         return count($merged);
     }
 
+    /** Forgets the loaded list, so the next lookup reads `disposable.storage` again. */
     public function flush(): void
     {
         $this->domains = null;
+    }
+
+    /** @return array<string, true> */
+    private function all(): array
+    {
+        return $this->domains ??= $this->loadFromStorage();
     }
 
     /** @return array<int, mixed> */
@@ -82,7 +90,7 @@ class DisposableDomains
     /** @return array<string, true> */
     private function loadFromStorage(): array
     {
-        $path = (string)$this->config->get('email-integrity.disposable.storage');
+        $path = $this->path();
 
         if ($path === '' || ! is_file($path)) {
             return [];
@@ -97,7 +105,7 @@ class DisposableDomains
     /** @param list<string> $domains */
     private function write(array $domains): void
     {
-        $path = (string)$this->config->get('email-integrity.disposable.storage');
+        $path = $this->path();
         $directory = dirname($path);
 
         if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
@@ -114,6 +122,11 @@ class DisposableDomains
 
             throw new RuntimeException('Cannot write the disposable list to: ' . $path);
         }
+    }
+
+    private function path(): string
+    {
+        return (string)$this->config->get('email-integrity.disposable.storage');
     }
 
     private function normalise(string $domain): string

@@ -25,13 +25,6 @@ class UpdateTest extends TestCase
         ]);
     }
 
-    protected function tearDown(): void
-    {
-        @unlink($this->path);
-
-        parent::tearDown();
-    }
-
     private function domains(): DisposableDomains
     {
         return $this->app->make(DisposableDomains::class);

@@ -9,7 +9,8 @@ use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 /**
- * An address the mail provider reported as a complaint, a permanent bounce or its own block: never mailed again.
+ * An address the mail provider reported as a complaint, a permanent bounce or its own block, or that an SMTP server
+ * refused as invalid at send time: never mailed again.
  *
  * @property int $id
  * @property string $email
@@ -17,22 +18,25 @@ use RuntimeException;
  */
 class SuppressedAddress extends Model
 {
+    /** Printable ASCII, 1 to 254 characters, not ending in a space: see key(). */
+    private const STORABLE_KEY_PATTERN = '/^[\x20-\x7E]{0,253}[\x21-\x7E]$/D';
+
     protected $table = 'suppressed_addresses';
 
     protected $fillable = ['email', 'reason'];
 
     /**
-     * A complaint keys the inbox (only its owner can complain); a bounce keys the spelling, as it may follow a
-     * stranger's typo. Null for no address, over 254 characters (RFC 5321), outside printable ASCII (a `_ci` collation
-     * folds `ｊａｃｋ@`, `jäck@` and KELVIN SIGN onto `jack@`), or ending in a space (MariaDB ignores it when comparing).
+     * The inbox or the spelling, as the reason keysInbox(). Null for no address, over 254 characters (RFC 5321), outside
+     * printable ASCII (a `_ci` collation folds `ｊａｃｋ@`, `jäck@` and KELVIN SIGN onto `jack@`), or ending in a space
+     * (MariaDB ignores it when comparing).
      */
     public static function key(string $address, SuppressionReason $reason): ?string
     {
-        $key = $reason === SuppressionReason::complained
+        $key = $reason->keysInbox()
             ? EmailAddress::canonical(EmailAddress::bare($address)) ?? EmailAddress::literal($address)
             : EmailAddress::literal($address);
 
-        return $key !== null && preg_match('/^[\x20-\x7E]{0,253}[\x21-\x7E]$/D', $key) === 1 ? $key : null;
+        return $key !== null && preg_match(self::STORABLE_KEY_PATTERN, $key) === 1 ? $key : null;
     }
 
     /**
@@ -70,9 +74,10 @@ class SuppressedAddress extends Model
 
         if (in_array($key, self::keys(...$own), true)) {
             report(new RuntimeException(sprintf(
-                'The site inbox %s is now suppressed (%s). Fix its mailbox, then lift it here and at the mail provider.',
+                'The site inbox %s is now suppressed (%s). Fix its mailbox, then lift it here%s.',
                 $key,
                 $reason->value,
+                $reason->heldByProvider() ? ' and at the mail provider' : '',
             )));
         }
 

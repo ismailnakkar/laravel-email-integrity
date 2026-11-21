@@ -80,6 +80,14 @@ class DisposableTest extends TestCase
         $this->assertFalse($this->integrity()->isDisposable('a@example.test'));
     }
 
+    public function test_an_empty_list_entry_covers_nothing(): void
+    {
+        config(['email-integrity.allow' => ['', '.'], 'email-integrity.deny' => ['', ' . ']]);
+
+        $this->assertTrue($this->integrity()->isDisposable('someone@mailinator.com'));
+        $this->assertFalse($this->integrity()->isDisposable('someone@gmail.com'));
+    }
+
     public function test_the_master_switch_makes_the_check_inert(): void
     {
         config(['email-integrity.enabled' => false]);

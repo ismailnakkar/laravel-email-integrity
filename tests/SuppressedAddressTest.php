@@ -97,8 +97,20 @@ class SuppressedAddressTest extends TestCase
         Exceptions::assertNothingReported();
 
         SuppressedAddress::suppress('Contact+x@example.com', SuppressionReason::complained);
-        Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), 'contact@example.com')
-            && str_contains($e->getMessage(), 'complained'));
+        Exceptions::assertReported(fn (RuntimeException $e): bool => $e->getMessage()
+            === 'The site inbox contact@example.com is now suppressed (complained). Fix its mailbox, then lift it here and at the mail provider.');
+    }
+
+    /** A refusal at send time never reached the provider's list. */
+    public function test_an_own_inbox_refused_as_invalid_is_reported_without_the_provider(): void
+    {
+        Exceptions::fake();
+        config(['email-integrity.suppression.own_inboxes' => ['contact@example.com']]);
+
+        SuppressedAddress::suppress('Contact@Example.com', SuppressionReason::invalid);
+
+        Exceptions::assertReported(fn (RuntimeException $e): bool => $e->getMessage()
+            === 'The site inbox contact@example.com is now suppressed (invalid). Fix its mailbox, then lift it here.');
     }
 
     public function test_the_migration_is_published_never_loaded(): void

@@ -1,8 +1,13 @@
 # Laravel Email Integrity
 
-Validation rules that refuse disposable and unroutable email domains, a canonical form that makes one mailbox one
-account, and an opt-in suppression list that stops mail to addresses your mail provider reports as bounced or
-complained.
+Keeps bad email addresses out of a Laravel app, and stops mail to the ones that go bad:
+
+- **Validation rules** that refuse disposable domains and domains that cannot receive mail.
+- **One mailbox, one account:** a canonical form (`+` tags and Gmail dots folded), with a cast and a `unique` rule
+  built on it.
+- **Suppression (opt-in):** your mail provider's webhook records bounces and complaints, an SMTP server's refusal of
+  an invalid recipient is recorded at send time, and no mail reaches those addresses again.
+- **Unsendable notifications:** a mail notification to an address that would throw mid-send is skipped.
 
 The domain checks never send mail, so they cannot prove a mailbox exists: keep your verification link.
 
@@ -29,40 +34,16 @@ Your app provides:
 
 ```bash
 composer require ismailnakkar/laravel-email-integrity
-php artisan vendor:publish --tag=email-integrity-config
 php artisan email-integrity:update
 ```
 
+The update downloads the disposable list; until it has run, only `deny` entries are refused as disposable. Publish the
+config only to change a default: `php artisan vendor:publish --tag=email-integrity-config`.
+
+## Schedule
+
 The package schedules `email-integrity:update` daily at 03:00 on every server, as each keeps its own list file; do not
-schedule it again.
-
-## Configuration
-
-| Key                          | Default                   | Meaning                                                   |
-|------------------------------|---------------------------|-----------------------------------------------------------|
-| `enabled`                    | `true`                    | Off, both domain checks pass everything.                  |
-| `schedule`                   | `true`                    | Schedules the daily update; `false` leaves it to you.     |
-| `allow`                      | `[]`                      | Domains never refused as disposable, nor looked up.       |
-| `deny`                       | `[]`                      | Domains refused as disposable.                            |
-| `disposable.sources`         | one URL                   | URLs of JSON arrays of domains, merged by the update.     |
-| `disposable.storage`         | `storage/framework/…`     | Full path of the merged list file.                        |
-| `disposable.timeout`         | `30`                      | Seconds per source request.                               |
-| `disposable.min_domains`     | `1000`                    | Fewer from any source keeps the previous list.            |
-| `host.enabled`               | `true`                    | Off, `routable_domain` passes everything.                 |
-| `host.fail_open`             | `true`                    | The answer while the resolver is unreachable.             |
-| `host.cache_ttl`             | `3600`                    | Seconds a resolver's answer is cached.                    |
-| `suppression.enabled`        | `false`                   | Suppression on or off; `enabled` does not touch it.       |
-| `suppression.own_inboxes`    | `[]`                      | Your own inboxes: a block on one is passed to `report()`. |
-| `suppression.webhook.path`   | `email-integrity/webhook` | The webhook's URI; null registers no route.               |
-| `suppression.webhook.domain` | `null`                    | The one host it answers on; null answers on any.          |
-| `suppression.webhook.parser` | `ResendRequestParser`     | The Symfony `RequestParserInterface` that reads events.   |
-| `suppression.webhook.secret` | `RESEND_WEBHOOK_SECRET`   | The parser's signing secret.                              |
-
-`enabled` and `host.enabled` read `EMAIL_INTEGRITY_ENABLED` and `EMAIL_INTEGRITY_HOST_CHECK`. The default source is
-`disposable/disposable-email-domains` on jsDelivr. An `allow` or `deny` entry covers the domain and its subdomains; the
-fetched list is matched exactly, so a provider with a wildcard MX (`anything.mailinator.com`) needs a `deny` entry.
-
-A key the published file leaves out keeps its default, inside a group too. A list you set replaces the default whole.
+schedule it again. To run it at another time, set `schedule` to `false` and schedule the command yourself.
 
 ## Validation
 
@@ -77,7 +58,8 @@ Keep that order:
   both rules pass it.
 - **Cheapest first:** `max:255` before the `email` parser, `not_disposable` (in memory) before `routable_domain` (DNS).
 
-`not_disposable`, `routable_domain`, `not_suppressed` and `unclaimed_mailbox` are registered for you. The rule objects:
+The package registers `not_disposable`, `routable_domain`, `not_suppressed` and `unclaimed_mailbox`. Each runs the
+rule object of the same name:
 
 ```php
 use EmailIntegrity\Rules\NotDisposable;
@@ -175,8 +157,8 @@ default.
 
 ## Suppression
 
-Off by default. Once on, a complaint, a permanent bounce or the provider's own block puts the address in
-`suppressed_addresses`, and no mail reaches it until you lift it.
+Off by default. Once on, a complaint, a permanent bounce, the provider's own block or an SMTP server's refusal of the
+recipient puts the address in `suppressed_addresses`, and no mail reaches it until you lift it.
 
 1. Install the webhook's packages: `composer require symfony/webhook symfony/resend-mailer`.
 2. Create the table:
@@ -203,22 +185,23 @@ Complaints are recorded for any provider; a bounce only when the payload marks i
 
 ### What is recorded
 
-| Event (Symfony name)                                                       | Writes                           |
-|----------------------------------------------------------------------------|----------------------------------|
-| `MailerEngagementEvent::SPAM`                                              | `complained`, keyed on the inbox |
-| `MailerDeliveryEvent::BOUNCE` marked permanent (Resend `data.bounce.type`) | `bounced`, keyed on the spelling |
-| Resend `email.suppressed` (`DROPPED`)                                      | `bounced`, keyed on the spelling |
-| anything else, temporary bounces and `email.failed` included               | nothing                          |
+| Event (Symfony name)                                                           | Writes                           |
+|--------------------------------------------------------------------------------|----------------------------------|
+| `MailerEngagementEvent::SPAM`                                                  | `complained`, keyed on the inbox |
+| `MailerDeliveryEvent::BOUNCE` marked permanent (Resend `data.bounce.type`)     | `bounced`, keyed on the spelling |
+| Resend `email.suppressed` (`DROPPED`)                                          | `bounced`, keyed on the spelling |
+| an SMTP refusal of the recipient at send time ([below](#refused-at-send-time)) | `invalid`, keyed on the spelling |
+| anything else, temporary bounces and `email.failed` included                   | nothing                          |
 
 - A complaint blocks every spelling of the inbox (its `canonical()` form): only the inbox's owner can complain. A
-  bounce blocks only its own spelling, so a stranger who types `member+x@corp.example` cannot block
+  bounce or a refusal blocks only its own spelling, so a stranger who types `member+x@corp.example` cannot block
   `member@corp.example`.
 - A key is lowercase printable ASCII of at most 254 characters with a punycode domain. Any other address is never
   stored, since a `_ci` collation would match it to its ASCII lookalike; the provider's own list still drops it.
 - Writes are insert-if-absent: a redelivered event changes nothing, and the first reason sticks.
 - An `own_inboxes` entry is blocked like any other.
 
-The webhook:
+### The webhook
 
 - Writes only signed events. It answers 401 while the secret is missing or gives a key under 16 bytes; a secret
   starting `whsec_` (or any secret, for Resend's parser) is base64-decoded strictly after the prefix.
@@ -254,8 +237,44 @@ SuppressedAddress::lift($address);                                    // the num
 
 While suppression is off, `blocking()` answers null without a query. A new row fires Eloquent's `created` event.
 
-To unblock an address, run `php artisan email-integrity:lift someone@example.com`, and remove it from the provider's
-own list too, or the next send comes back as the provider's block and suppresses it again.
+To unblock an address, run `php artisan email-integrity:lift someone@example.com`. For a row the provider's webhook
+recorded (`$row->reason->heldByProvider()`: `bounced`, `complained`), remove it from the provider's own list too, or the
+next send comes back as the provider's block and suppresses it again; the command says so. An `invalid` row never
+reached that list.
+
+### Refused at send time
+
+While suppression is on, a recipient an SMTP server refuses for good as invalid is suppressed (`invalid`) and the send
+returns null instead of throwing, so a queued mail or notification ends with no retry and no failed job. It logs the
+warning `Mail not sent: the server refused the address.` with `email`, `reply` and `subject`, and the guard above drops
+later mail to the address.
+
+- **What counts:** a permanent (5xx) reply with an RFC 3463 destination status (`5.1.1`, `5.1.2`, `5.1.3`, `5.1.6`,
+  `5.1.10`) or the words `Invalid recipient` (Resend: `550 Invalid recipient address`), when the message has one
+  recipient or the reply names exactly one of them (`550 5.1.1 <b@example.com>: …`). Anything else, a refused sender, a
+  temporary reply, a rejected message or a refusal on a message to several that names none of them, throws as before.
+- **Where:** `mail.manager` is the package's subclass of Laravel's, which wraps every SMTP transport it builds (a
+  failover's or round robin's included, and one from `Mail::extend()`) in `Mail\RefusedRecipientGuard`. An `smtp`
+  mailer's `getSymfonyTransport()` is that guard; its `transport` property is the `EsmtpTransport`. API transports
+  (Resend's, SES) and a test's `array` transport are left as built: only an SMTP reply names a recipient.
+
+### Addresses already stored
+
+To suppress, once, the stored addresses a provider would refuse, count them first:
+
+```bash
+php artisan email-integrity:suppress-invalid users --dry-run
+php artisan email-integrity:suppress-invalid users
+```
+
+Its arguments are `{table} {column=email}`. It checks each non-empty value against Laravel's `email:strict,filter`
+(`filter` refuses a domain without a dot, as Resend does) and suppresses each failure as `invalid`, keyed on the
+spelling; one outside printable ASCII is counted but never stored. It checks the form a row would hold, trimmed,
+lowercased, without a trailing dot and with the domain in punycode, so ` bob@gmail.com` or `bob@münchen.de` passes
+rather than block the inbox it folds onto. It prints
+`3 of 5 addresses in users.email fail email:strict,filter; 2 newly suppressed.` (with `Dry run:` and `would be newly
+suppressed` for `--dry-run`, which writes nothing). It pages by the column, so the table needs no `id`, and a second
+run suppresses nothing new. Expect about 15 seconds per 100,000 rows.
 
 ## Unsendable notifications
 
@@ -267,17 +286,75 @@ channel reads it: one address or a list, either may be `Name <address>`, or a ba
 A notification whose `toMail()` returns a `Mailable` is judged on the notifiable's route, not the `Mailable`'s own
 recipients. A `Mailable` sent with `Mail::to()` is not covered: ask `EmailAddress::sendable()` first.
 
+## Configuration
+
+| Key                          | Default                   | Meaning                                                   |
+|------------------------------|---------------------------|-----------------------------------------------------------|
+| `enabled`                    | `true`                    | Off, both domain checks pass everything.                  |
+| `schedule`                   | `true`                    | Schedules the daily update; `false` leaves it to you.     |
+| `allow`                      | `[]`                      | Domains never refused as disposable, nor looked up.       |
+| `deny`                       | `[]`                      | Domains refused as disposable.                            |
+| `disposable.sources`         | one URL                   | URLs of JSON arrays of domains, merged by the update.     |
+| `disposable.storage`         | `storage/framework/…`     | Full path of the merged list file.                        |
+| `disposable.timeout`         | `30`                      | Seconds per source request.                               |
+| `disposable.min_domains`     | `1000`                    | Fewer from any source keeps the previous list.            |
+| `host.enabled`               | `true`                    | Off, `routable_domain` passes everything.                 |
+| `host.fail_open`             | `true`                    | The answer while the resolver is unreachable.             |
+| `host.cache_ttl`             | `3600`                    | Seconds a resolver's answer is cached.                    |
+| `suppression.enabled`        | `false`                   | Suppression on or off; `enabled` does not touch it.       |
+| `suppression.own_inboxes`    | `[]`                      | Your own inboxes: a block on one is passed to `report()`. |
+| `suppression.webhook.path`   | `email-integrity/webhook` | The webhook's URI; null registers no route.               |
+| `suppression.webhook.domain` | `null`                    | The one host it answers on; null answers on any.          |
+| `suppression.webhook.parser` | `ResendRequestParser`     | The Symfony `RequestParserInterface` that reads events.   |
+| `suppression.webhook.secret` | `RESEND_WEBHOOK_SECRET`   | The parser's signing secret.                              |
+
+`enabled` and `host.enabled` read `EMAIL_INTEGRITY_ENABLED` and `EMAIL_INTEGRITY_HOST_CHECK`. The default source is
+`disposable/disposable-email-domains` on jsDelivr. An `allow` or `deny` entry covers the domain and its subdomains; the
+fetched list is matched exactly, so a provider with a wildcard MX (`anything.mailinator.com`) needs a `deny` entry.
+
+A key the published file leaves out keeps its default, inside a group too. A list you set replaces the default whole.
+
 ## Translations
 
 The package ships en, fr, ar and es: `email-integrity::messages.disposable`, `unroutable` and `suppressed`. To reword
 one, put only that key in `lang/vendor/email-integrity/{locale}/messages.php`; the others keep the package's lines.
 Add a language the same way, with every key.
 
+## API
+
+All classes are under `EmailIntegrity\`.
+
+- **`EmailIntegrity`** (resolve from the container): `isDisposable($email)`, `hostResolves($email)`.
+- **`EmailAddress`** (static):
+  - `domainOf($email)`: lowercase punycode domain, or null.
+  - `canonical($email)`: the inbox it reaches, or null.
+  - `sendable($email)`: whether Symfony Mime accepts the bare address.
+  - `listedIn($domain, $entries)`: whether an entry is the domain or a parent of it, both normalised as
+    `domainOf()` does (`Mail.Example.com.` is covered by `example.com`).
+- **`SuppressedAddress`** (Eloquent model): `blocking(...$addresses)`, `mailable($address)`,
+  `suppress($address, $reason)`, `lift($address)`, `key($address, $reason)` (the stored form, or null).
+- **`SuppressionReason`** (enum): `bounced`, `complained`, `invalid`; `heldByProvider()` (whether the provider keeps its
+  own block too).
+- **`Mail\RefusedRecipientGuard`**: an SMTP mailer's transport; `transport` is the one it wraps.
+- **`DisposableDomains`** (final, resolve from the container): `flush()` (reload from the file on next use).
+- **Rules** (final): `Rules\NotDisposable`, `Rules\RoutableDomain` (resolve from the container),
+  `Rules\NotSuppressed`, `Rules\UnclaimedMailbox`.
+- **Cast:** `Casts\CanonicalEmail`.
+- **Controller:** `Http\SuppressionWebhook`.
+- **Commands:** `email-integrity:update`, `email-integrity:lift {address}`,
+  `email-integrity:suppress-invalid {table} {column=email} {--dry-run}`.
+
 ## Testing your app
 
+- Set `EMAIL_INTEGRITY_HOST_CHECK` to `false` in `phpunit.xml`, so no test waits on DNS.
+- Refuse a domain in a test with `config(['email-integrity.deny' => ['throwaway.test']])`. To test the fetched list's
+  exact matching, write a JSON array of lowercase punycode domains, no trailing dot, to a file, set
+  `email-integrity.disposable.storage` to its path, then call `app(DisposableDomains::class)->flush()`, as the list
+  loads once per request or job.
 - `Mail::fake()` never fires `MessageSending`, and `Notification::fake()` never fires `NotificationSending`, so test
   both guards by sending on the `array` mailer.
 - Build rows with `SuppressedAddress::suppress()`.
+- A test that inspects an `smtp` mailer's `EsmtpTransport` reads `Mail::mailer('smtp')->getSymfonyTransport()->transport`.
 - Sign a Resend event the way Svix does:
 
   ```php
@@ -294,6 +371,37 @@ Add a language the same way, with every key.
   ```
 
 ## Upgrading
+
+### From 2.1
+
+3.0 closes API no app needs:
+
+- `Rules\NotDisposable`, `Rules\NotSuppressed`, `Rules\RoutableDomain` and `Rules\UnclaimedMailbox` are final: a
+  rule that extends one wraps it instead, taking it in the constructor and calling its `validate()`.
+- `DisposableDomains` is final too: where you extended it to change the list's source or file, set
+  `disposable.sources` or `disposable.storage` instead.
+- `EmailAddress::coveredBy($domain, $entry)` is private: call `EmailAddress::listedIn($domain, [$entry])`.
+- `DisposableDomains::all()` is private. To test an address, ask `app(EmailIntegrity::class)->isDisposable($address)`
+  (it also applies `allow`, `deny` and `enabled`). To read the fetched list itself, decode the JSON list of domains in
+  the file at `config('email-integrity.disposable.storage')`.
+- `EmailIntegrity::enabled()` is private: read `config('email-integrity.enabled')`.
+- `DisposableDomains::contains()` and `update()`, `EmailAddress::bare()` and `literal()` are `@internal`: public, but
+  free to change in any release. Ask `isDisposable()` instead of `contains()` (it applies `allow` and `deny`), and run
+  `email-integrity:update` instead of `update()`.
+
+`listedIn()` now normalises `$domain` as it does each entry, so a domain as typed matches. A truthy
+`suppression.enabled` (`1`, `'1'`) now registers the webhook route too, as it already blocked mail.
+
+3.0 also suppresses a recipient an SMTP server refuses ([Refused at send time](#refused-at-send-time)):
+
+- While suppression is on, such a send returns null instead of throwing `UnexpectedResponseException`. Code that
+  catches it to retry or alert no longer sees those replies; a failed-job alert no longer fires for them.
+- `SuppressionReason::invalid` is new: a `match` on the enum needs an arm for it.
+- `mail.manager` is now `EmailIntegrity\Mail\GuardedMailManager`, a subclass of Laravel's `MailManager`, and an
+  `smtp` mailer's `getSymfonyTransport()` is a `Mail\RefusedRecipientGuard`. A test that asserts an `EsmtpTransport`
+  reads the guard's `transport` property instead.
+- After the deploy, suppress the addresses already stored once: `php artisan email-integrity:suppress-invalid users
+  --dry-run`, then without `--dry-run` ([Addresses already stored](#addresses-already-stored)).
 
 ### From 2.0
 

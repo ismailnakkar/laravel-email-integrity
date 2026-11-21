@@ -29,6 +29,13 @@ final class SuppressionWebhook
 {
     private const PERMANENT_BOUNCE = 'permanent';
 
+    /** A shorter signing key is guessable. */
+    private const MIN_KEY_BYTES = 16;
+
+    private const WARNING_KEY_PREFIX = 'email-integrity:webhook-warning:';
+
+    private const WARNING_WINDOW_SECONDS = 300;
+
     public function __invoke(Request $request): Response
     {
         $parser = $this->parser();
@@ -82,10 +89,10 @@ final class SuppressionWebhook
     {
         // Fails open: a cache that throws or keeps nothing (the null store's add() answers false) logs every one.
         $first = rescue(function () use ($message, $context): bool {
-            $key = 'email-integrity:webhook-warning:' . hash('xxh128', serialize([$message, $context]));
+            $key = self::WARNING_KEY_PREFIX . hash('xxh128', serialize([$message, $context]));
 
-            return Cache::add($key, true, 300) || ! Cache::has($key);
-        }, rescue: true, report: false);
+            return Cache::add($key, true, self::WARNING_WINDOW_SECONDS) || ! Cache::has($key);
+        }, true, false);
 
         if ($first) {
             Log::warning($message, $context);
@@ -112,7 +119,7 @@ final class SuppressionWebhook
         return app($class);
     }
 
-    /** The secret, or null when it is missing or gives a key short enough to guess. */
+    /** The secret, or null when it is missing or gives a key under MIN_KEY_BYTES. */
     private function secret(RequestParserInterface $parser): ?string
     {
         $secret = config('email-integrity.suppression.webhook.secret');
@@ -127,7 +134,7 @@ final class SuppressionWebhook
             ? base64_decode(Str::chopStart($secret, 'whsec_'), true)
             : $secret;
 
-        return is_string($key) && strlen($key) >= 16 ? $secret : null;
+        return is_string($key) && strlen($key) >= self::MIN_KEY_BYTES ? $secret : null;
     }
 
     private function record(RemoteEvent $event): void
@@ -148,7 +155,7 @@ final class SuppressionWebhook
                 ?? throw new LogicException("Set mail.from.address to an address on the provider's sending domain before routing the suppression webhook.");
             $domain = is_string($from) ? EmailAddress::domainOf(EmailAddress::bare($from)) : null;
 
-            if ($domain === null || ! EmailAddress::coveredBy($domain, $own)) {
+            if ($domain === null || ! EmailAddress::listedIn($domain, [$own])) {
                 Log::info('Mail provider event for another sending domain ignored.', ['event' => $event->getName(), 'from' => $from]);
 
                 return;

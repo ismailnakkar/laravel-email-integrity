@@ -9,7 +9,7 @@ use EmailIntegrity\EmailIntegrity;
 use Illuminate\Contracts\Validation\ValidationRule;
 
 /** Refuses a domain that cannot receive mail. For entry forms, not payout or login paths: it depends on DNS. */
-class RoutableDomain implements ValidationRule
+final class RoutableDomain implements ValidationRule
 {
     public function __construct(private readonly EmailIntegrity $email) {}
 

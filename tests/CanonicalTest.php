@@ -116,4 +116,18 @@ class CanonicalTest extends TestCase
     {
         $this->assertSame('"x<victim@corp.example>"@attacker.example', EmailAddress::literal('"x<victim@corp.example>"@attacker.example'));
     }
+
+    /** A domain as typed, not as domainOf() returns it, still matches its own entry. */
+    public function test_listed_in_normalises_the_domain_as_it_normalises_each_entry(): void
+    {
+        $this->assertTrue(EmailAddress::listedIn(' Mail.Example.COM. ', ['example.com']));
+        $this->assertTrue(EmailAddress::listedIn('example.com', [' Example.COM. ']));
+        $this->assertFalse(EmailAddress::listedIn('notexample.com', ['example.com']));
+        $this->assertFalse(EmailAddress::listedIn('example.com', ['', '.', 42]));
+
+        if (function_exists('idn_to_ascii')) {
+            $this->assertTrue(EmailAddress::listedIn("Mail.\u{7075}.CC", ['xn--5nx.cc']));
+            $this->assertTrue(EmailAddress::listedIn('mail.xn--5nx.cc', ["\u{7075}.cc"]));
+        }
+    }
 }

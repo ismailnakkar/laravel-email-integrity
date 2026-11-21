@@ -87,4 +87,17 @@ class SendGuardTest extends TestCase
 
         $this->assertNull(SuppressedAddress::blocking('jane.doe@gmail.com'));
     }
+
+    /** The provider never listed an address refused at send time: nothing to clear there. */
+    public function test_lift_of_an_address_refused_as_invalid_says_nothing_about_the_provider(): void
+    {
+        SuppressedAddress::suppress('jane@gmail', SuppressionReason::invalid);
+
+        $this->artisan('email-integrity:lift', ['address' => 'jane@gmail'])
+            ->expectsOutputToContain('Lifted 1')
+            ->doesntExpectOutputToContain("mail provider's own suppression list")
+            ->assertExitCode(0);
+
+        $this->assertNull(SuppressedAddress::blocking('jane@gmail'));
+    }
 }

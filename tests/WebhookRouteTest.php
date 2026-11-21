@@ -72,4 +72,12 @@ class WebhookRouteTest extends TestCase
         $this->assertNull($this->webhookRoute());
         $this->post('/email-integrity/webhook')->assertNotFound();
     }
+
+    /** As SuppressedAddress::blocking() reads it: a route-less '1' would block mail but never learn a bounce. */
+    public function test_a_truthy_switch_registers_the_route(): void
+    {
+        $this->boot(['email-integrity.suppression.enabled' => '1']);
+
+        $this->assertInstanceOf(Route::class, $this->webhookRoute());
+    }
 }

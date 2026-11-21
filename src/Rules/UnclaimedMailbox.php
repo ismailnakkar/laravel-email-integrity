@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\DB;
  * `unique` by mailbox, for a table that keeps the address as typed beside its canonical form: core `unique` passes an
  * alias the index then throws on. Fails with the app's `validation.unique` message.
  */
-class UnclaimedMailbox implements ValidationRule
+final class UnclaimedMailbox implements ValidationRule
 {
     private mixed $ignore = null;
 

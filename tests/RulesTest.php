@@ -159,6 +159,19 @@ class RulesTest extends TestCase
         $this->assertStringContainsString('Temporary email addresses', $validator->errors()->first('email'));
     }
 
+    /** The locale is set after boot, as a middleware sets it; a `validation.custom` line rewords the string form. */
+    public function test_the_string_rule_reads_the_current_locale_and_a_custom_line(): void
+    {
+        $this->app->setLocale('fr');
+        $message = fn (): string => Validator::make(['email' => 'a@mailinator.com'], ['email' => 'not_disposable'])->errors()->first('email');
+
+        $this->assertSame('Les adresses e-mail temporaires ne sont pas acceptées ici. Veuillez utiliser une adresse à laquelle vous pouvez recevoir des e-mails.', $message());
+
+        $this->app['translator']->addLines(['validation.custom.email.not_disposable' => 'Choisissez une autre adresse.'], 'fr');
+
+        $this->assertSame('Choisissez une autre adresse.', $message());
+    }
+
     public function test_the_suppression_rule_refuses_a_blocked_address(): void
     {
         config(['email-integrity.suppression.enabled' => true]);

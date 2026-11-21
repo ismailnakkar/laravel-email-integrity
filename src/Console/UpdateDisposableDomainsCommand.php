@@ -9,7 +9,7 @@ use Illuminate\Console\Command;
 use Throwable;
 
 /** @internal */
-class UpdateDisposableDomainsCommand extends Command
+final class UpdateDisposableDomainsCommand extends Command
 {
     protected $signature = 'email-integrity:update';
 

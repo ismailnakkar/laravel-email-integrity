@@ -6,14 +6,21 @@ namespace EmailIntegrity;
 
 use Closure;
 use EmailIntegrity\Console\LiftSuppressionCommand;
+use EmailIntegrity\Console\SuppressInvalidCommand;
 use EmailIntegrity\Console\UpdateDisposableDomainsCommand;
 use EmailIntegrity\Http\SuppressionWebhook;
 use EmailIntegrity\Listeners\DropSuppressedMail;
 use EmailIntegrity\Listeners\SkipUnsendableMail;
+use EmailIntegrity\Mail\GuardedMailManager;
+use EmailIntegrity\Rules\NotDisposable;
+use EmailIntegrity\Rules\NotSuppressed;
+use EmailIntegrity\Rules\RoutableDomain;
 use EmailIntegrity\Rules\UnclaimedMailbox;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\CachesConfiguration;
+use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Mail\MailManager;
 use Illuminate\Notifications\Events\NotificationSending;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Event;
@@ -37,6 +44,9 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         // Scoped: the 74k-entry list loads once per request or job, and a queue worker or Octane sees the next update.
         $this->app->scoped(DisposableDomains::class);
         $this->app->scoped(EmailIntegrity::class);
+
+        // Every SMTP transport then suppresses a recipient its server refuses as invalid, read at send time.
+        $this->app->extend('mail.manager', static fn (MailManager $manager): MailManager => GuardedMailManager::replacing($manager));
     }
 
     public function boot(): void
@@ -45,49 +55,24 @@ class EmailIntegrityServiceProvider extends ServiceProvider
 
         // Deferred, so a request or job that never validates does not build the factory.
         $this->callAfterResolving('validator', function (ValidationFactory $validator): void {
-            $this->extend($validator, 'not_disposable', 'disposable', fn (EmailIntegrity $email, mixed $value): bool => ! $email->isDisposable($value));
-            $this->extend($validator, 'routable_domain', 'unroutable', fn (EmailIntegrity $email, mixed $value): bool => $email->hostResolves($value));
-            $this->extend($validator, 'not_suppressed', 'suppressed', fn (EmailIntegrity $email, mixed $value): bool => ! is_string($value) || SuppressedAddress::blocking($value) === null);
-
-            // Not $this->extend(): it takes parameters, and fails with UnclaimedMailbox's message (validation.unique).
-            $validator->extend('unclaimed_mailbox', static function (string $attribute, mixed $value, array $parameters, Validator $validator): bool {
+            $this->registerRule($validator, 'not_disposable', fn (): ValidationRule => $this->app->make(NotDisposable::class));
+            $this->registerRule($validator, 'routable_domain', fn (): ValidationRule => $this->app->make(RoutableDomain::class));
+            $this->registerRule($validator, 'not_suppressed', static fn (): ValidationRule => new NotSuppressed);
+            $this->registerRule($validator, 'unclaimed_mailbox', static function (array $parameters, Validator $validator): ValidationRule {
                 $validator->requireParameterCount(1, $parameters, 'unclaimed_mailbox');
 
-                $rule = InvokableValidationRule::make((new UnclaimedMailbox(...array_slice($parameters, 0, 2)))->ignore($parameters[2] ?? null))
-                    ->setValidator($validator);
-
-                if ($rule->passes($attribute, $value)) {
-                    return true;
-                }
-
-                $validator->fallbackMessages['unclaimed_mailbox'] = $rule->message()[0];
-
-                return false;
+                return (new UnclaimedMailbox(...array_slice($parameters, 0, 2)))->ignore($parameters[2] ?? null);
             });
         });
 
         // Inert while suppression is off, read at send time. Package providers boot first, so it runs before the app's.
         Event::listen(MessageSending::class, DropSuppressedMail::class);
-
         Event::listen(NotificationSending::class, SkipUnsendableMail::class);
 
-        // Cached routes already hold it. Only while suppression is on: the controller refuses everything otherwise. By
-        // class, not the 'throttle' alias an app may remap. No middleware group: the signature stands in for CSRF.
-        $path = config('email-integrity.suppression.webhook.path');
-        $domain = config('email-integrity.suppression.webhook.domain');
-
-        if (config('email-integrity.suppression.enabled') === true && is_string($path) && trim($path, '/') !== '' && ! $this->app->routesAreCached()) {
-            $route = Route::post(trim($path, '/'), SuppressionWebhook::class)
-                ->middleware(ThrottleRequests::with(120, 1, 'email-integrity-webhook'))
-                ->name('email-integrity.webhook');
-
-            if (is_string($domain)) {
-                $route->domain($domain);
-            }
-        }
+        $this->registerWebhookRoute();
 
         if ($this->app->runningInConsole()) {
-            $this->commands([UpdateDisposableDomainsCommand::class, LiftSuppressionCommand::class]);
+            $this->commands([UpdateDisposableDomainsCommand::class, LiftSuppressionCommand::class, SuppressInvalidCommand::class]);
 
             // No onOneServer() or withoutOverlapping(): each server keeps its own list, and both lock the shared cache.
             $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
@@ -127,17 +112,47 @@ class EmailIntegrityServiceProvider extends ServiceProvider
         return $defaults;
     }
 
-    /** The message is set on failure: extend()'s own is never translated, and boot() runs before the locale is set. */
-    private function extend(ValidationFactory $validator, string $rule, string $message, Closure $passes): void
+    /**
+     * The string name runs the rule object. The message is set on failure: extend()'s own is never translated, and
+     * boot() runs before the locale is set.
+     *
+     * @param  Closure(array<int, string>, Validator): ValidationRule  $make
+     */
+    private function registerRule(ValidationFactory $factory, string $name, Closure $make): void
     {
-        $validator->extend($rule, function (string $attribute, mixed $value, array $parameters, $validator) use ($rule, $message, $passes): bool {
-            if ($passes($this->app->make(EmailIntegrity::class), $value)) {
+        $factory->extend($name, static function (string $attribute, mixed $value, array $parameters, Validator $validator) use ($name, $make): bool {
+            $rule = InvokableValidationRule::make($make($parameters, $validator))->setValidator($validator);
+
+            if ($rule->passes($attribute, $value)) {
                 return true;
             }
 
-            $validator->fallbackMessages[$rule] = trans("email-integrity::messages.{$message}");
+            $validator->fallbackMessages[$name] = $rule->message()[0];
 
             return false;
         });
+    }
+
+    /**
+     * Only while suppression is on: the controller refuses everything otherwise. Cached routes already hold it.
+     * Throttled by class, not the `throttle` alias an app may remap. No middleware group: the signature stands in for
+     * CSRF.
+     */
+    private function registerWebhookRoute(): void
+    {
+        $path = config('email-integrity.suppression.webhook.path');
+        $domain = config('email-integrity.suppression.webhook.domain');
+
+        if (! config('email-integrity.suppression.enabled') || ! is_string($path) || trim($path, '/') === '' || $this->app->routesAreCached()) {
+            return;
+        }
+
+        $route = Route::post(trim($path, '/'), SuppressionWebhook::class)
+            ->middleware(ThrottleRequests::with(120, 1, 'email-integrity-webhook'))
+            ->name('email-integrity.webhook');
+
+        if (is_string($domain)) {
+            $route->domain($domain);
+        }
     }
 }

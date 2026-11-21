@@ -22,7 +22,7 @@ final class EmailAddress
         // The last `@`: a quoted local part may hold one (`"a@b"@example.com`), and the first would bypass the lists.
         $at = mb_strrpos($email, '@');
 
-        if ($at === false || $at === mb_strlen($email) - 1) {
+        if ($at === false) {
             return null;
         }
 
@@ -36,24 +36,7 @@ final class EmailAddress
         // A trailing dot names the same domain.
         $domain = rtrim($domain, '.');
 
-        if ($domain === '') {
-            return null;
-        }
-
-        return self::ascii($domain);
-    }
-
-    /** Punycode, as the lists publish it (`灵.cc` is `xn--5nx.cc`). As typed without ext-intl or when malformed. */
-    private static function ascii(string $domain): string
-    {
-        if (! function_exists('idn_to_ascii')) {
-            return $domain;
-        }
-
-        // Nontransitional, as Symfony Mime sends it: transitional folds `straße.de` onto `strasse.de`, another domain.
-        $ascii = @idn_to_ascii($domain, IDNA_DEFAULT | IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46);
-
-        return is_string($ascii) && $ascii !== '' ? $ascii : $domain;
+        return $domain === '' ? null : self::ascii($domain);
     }
 
     /**
@@ -93,13 +76,19 @@ final class EmailAddress
     /**
      * The address inside a trailing `<…>` (providers send `Name <address>`), trimmed. Trailing only: a quoted local
      * part may hold `<victim@…>`.
+     *
+     * @internal
      */
     public static function bare(string $address): string
     {
         return trim(preg_match('/<([^<>]+)>\s*$/', $address, $match) === 1 ? $match[1] : $address);
     }
 
-    /** Bare, lowercased, punycode domain, nothing folded. Null without a local part or domain. */
+    /**
+     * Bare, lowercased, punycode domain, nothing folded. Null without a local part or domain.
+     *
+     * @internal
+     */
     public static function literal(string $address): ?string
     {
         $address = self::bare($address);
@@ -107,14 +96,6 @@ final class EmailAddress
         $local = self::local($address);
 
         return $domain === null || $local === '' ? null : $local . '@' . $domain;
-    }
-
-    /** strtolower, not mb_: mb folds U+212A KELVIN SIGN onto `k`, giving a stranger the owner's jack@. */
-    private static function local(string $address): string
-    {
-        $address = trim($address);
-
-        return strtolower(mb_substr($address, 0, (int)mb_strrpos($address, '@')));
     }
 
     /**
@@ -136,26 +117,56 @@ final class EmailAddress
         return true;
     }
 
-    /** True when `$domain` is the entry itself or a subdomain of it. */
-    public static function coveredBy(string $domain, string $entry): bool
-    {
-        // Normalised as domainOf() does, so an entry typed `灵.cc` matches `xn--5nx.cc`.
-        $entry = self::ascii(rtrim(mb_strtolower(trim($entry)), '.'));
-
-        return $entry !== '' && ($domain === $entry || str_ends_with($domain, '.' . $entry));
-    }
-
     /**
+     * True when any string entry is `$domain` or a parent of it. Both sides are normalised as domainOf() does, so
+     * `Mail.Example.com.` is covered by `example.com` and an entry typed `灵.cc` matches `xn--5nx.cc`.
+     *
      * @param  iterable<mixed>  $entries
      */
     public static function listedIn(string $domain, iterable $entries): bool
     {
+        $domain = self::normalised($domain);
+
         foreach ($entries as $entry) {
-            if (is_string($entry) && self::coveredBy($domain, $entry)) {
+            if (is_string($entry) && self::coveredBy($domain, self::normalised($entry))) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** True when `$domain` is the entry itself or a subdomain of it, both normalised. An empty entry covers nothing. */
+    private static function coveredBy(string $domain, string $entry): bool
+    {
+        return $entry !== '' && ($domain === $entry || str_ends_with($domain, '.' . $entry));
+    }
+
+    /** Trimmed, lowercased, no trailing dot, punycode. */
+    private static function normalised(string $domain): string
+    {
+        return self::ascii(rtrim(mb_strtolower(trim($domain)), '.'));
+    }
+
+    /** Punycode, as the lists publish it (`灵.cc` is `xn--5nx.cc`). As typed without ext-intl, when empty or malformed. */
+    private static function ascii(string $domain): string
+    {
+        // idn_to_ascii('') throws a ValueError `@` cannot hide.
+        if ($domain === '' || ! function_exists('idn_to_ascii')) {
+            return $domain;
+        }
+
+        // Nontransitional, as Symfony Mime sends it: transitional folds `straße.de` onto `strasse.de`, another domain.
+        $ascii = @idn_to_ascii($domain, IDNA_DEFAULT | IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46);
+
+        return is_string($ascii) && $ascii !== '' ? $ascii : $domain;
+    }
+
+    /** strtolower, not mb_: mb folds U+212A KELVIN SIGN onto `k`, giving a stranger the owner's jack@. */
+    private static function local(string $address): string
+    {
+        $address = trim($address);
+
+        return strtolower(mb_substr($address, 0, (int)mb_strrpos($address, '@')));
     }
 }

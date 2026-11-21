@@ -10,7 +10,12 @@ use Illuminate\Contracts\Config\Repository as Config;
 /** Domain checks only: neither proves the mailbox exists. */
 class EmailIntegrity
 {
-    private const RESOLVER_DOWN = 'email-integrity:resolver-down';
+    private const HOST_KEY_PREFIX = 'email-integrity:host:';
+
+    private const RESOLVER_DOWN_KEY = 'email-integrity:resolver-down';
+
+    /** Remembered briefly: a resolver that times out would make every signup wait out all four lookups. */
+    private const RESOLVER_DOWN_SECONDS = 30;
 
     public function __construct(
         private readonly Config $config,
@@ -18,21 +23,12 @@ class EmailIntegrity
         private readonly DisposableDomains $disposable,
     ) {}
 
-    public function enabled(): bool
-    {
-        return (bool)$this->config->get('email-integrity.enabled', true);
-    }
-
     /** True for a domain on `deny` or the fetched list, unless `allow` covers it. False while disabled. */
     public function isDisposable(mixed $email): bool
     {
         $domain = EmailAddress::domainOf($email);
 
-        if ($domain === null || ! $this->enabled()) {
-            return false;
-        }
-
-        if (EmailAddress::listedIn($domain, (array)$this->config->get('email-integrity.allow', []))) {
+        if ($domain === null || ! $this->enabled() || $this->allowed($domain)) {
             return false;
         }
 
@@ -47,34 +43,34 @@ class EmailIntegrity
     public function hostResolves(mixed $email): bool
     {
         $domain = EmailAddress::domainOf($email);
-
-        if ($domain === null) {
-            return true;
-        }
-
         $host = $this->config->get('email-integrity.host', []);
 
-        if (! $this->enabled() || ! ($host['enabled'] ?? true)) {
-            return true;
-        }
-
-        if (EmailAddress::listedIn($domain, (array)$this->config->get('email-integrity.allow', []))) {
+        if ($domain === null || ! $this->enabled() || ! ($host['enabled'] ?? true) || $this->allowed($domain)) {
             return true;
         }
 
         // TTL 0 stores nothing, so a resolver blip is never cached as a verdict.
         $ttl = fn (?bool $answer): int => $answer === null ? 0 : (int)($host['cache_ttl'] ?? 3600);
-
         $store = $this->cache->store();
 
         $resolved = $store->remember(
             // Hashed: a 247-character domain passes `max:255`, and the database cache store's key is a varchar(255).
-            'email-integrity:host:' . hash('xxh128', $domain),
+            self::HOST_KEY_PREFIX . hash('xxh128', $domain),
             $ttl,
-            fn (): ?bool => $store->has(self::RESOLVER_DOWN) ? null : $this->resolve($domain),
+            fn (): ?bool => $store->has(self::RESOLVER_DOWN_KEY) ? null : $this->resolve($domain),
         );
 
         return $resolved ?? (bool)($host['fail_open'] ?? true);
+    }
+
+    private function enabled(): bool
+    {
+        return (bool)$this->config->get('email-integrity.enabled', true);
+    }
+
+    private function allowed(string $domain): bool
+    {
+        return EmailAddress::listedIn($domain, (array)$this->config->get('email-integrity.allow', []));
     }
 
     /** Null when the resolver could not be reached. */
@@ -98,8 +94,7 @@ class EmailIntegrity
             return false;
         }
 
-        // Remembered briefly: a resolver that times out would make every signup wait out all four lookups.
-        $this->cache->store()->put(self::RESOLVER_DOWN, true, 30);
+        $this->cache->store()->put(self::RESOLVER_DOWN_KEY, true, self::RESOLVER_DOWN_SECONDS);
 
         return null;
     }
