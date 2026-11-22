@@ -113,9 +113,11 @@ class SuppressedAddressTest extends TestCase
             === 'The site inbox contact@example.com is now suppressed (invalid). Fix its mailbox, then lift it here.');
     }
 
-    public function test_the_migration_is_published_never_loaded(): void
+    public function test_the_migration_is_published_dated_never_loaded(): void
     {
-        $this->assertNotEmpty(ServiceProvider::pathsToPublish(EmailIntegrityServiceProvider::class, 'email-integrity-migrations'));
+        $published = ServiceProvider::pathsToPublish(EmailIntegrityServiceProvider::class, 'email-integrity-migrations');
+
+        $this->assertSame([database_path('migrations/2026_10_03_000000_create_suppressed_addresses_table.php')], array_values($published));
         $this->assertSame([], $this->app->make('migrator')->paths());
     }
 }

@@ -87,7 +87,7 @@ class EmailIntegrityServiceProvider extends ServiceProvider
 
             // Publish-only: suppression is opt-in, so an app that never turns it on gets no table.
             $this->publishesMigrations([
-                __DIR__ . '/../database/migrations' => database_path('migrations'),
+                __DIR__ . '/../database/migrations/create_suppressed_addresses_table.php' => database_path('migrations/2026_10_03_000000_create_suppressed_addresses_table.php'),
             ], 'email-integrity-migrations');
         }
     }
