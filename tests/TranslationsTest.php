@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EmailIntegrity\Tests;
 
+use Illuminate\Support\Arr;
 use PHPUnit\Framework\TestCase;
 
 final class TranslationsTest extends TestCase
@@ -14,12 +15,12 @@ final class TranslationsTest extends TestCase
         $this->assertNotEmpty($languages);
 
         foreach (glob(__DIR__ . '/../lang/en/*.php') ?: [] as $path) {
-            $english = require $path;
+            $english = Arr::dot(require $path);
 
             foreach ($languages as $language) {
                 $where = "lang/{$language}/" . basename($path);
                 $this->assertFileExists(__DIR__ . "/../{$where}");
-                $lines = require __DIR__ . "/../{$where}";
+                $lines = Arr::dot(require __DIR__ . "/../{$where}");
 
                 $this->assertSame(array_keys($english), array_keys($lines), $where);
 

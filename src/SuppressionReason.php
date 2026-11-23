@@ -24,6 +24,12 @@ enum SuppressionReason: string
         };
     }
 
+    /** Why mail to the address is blocked, for a page that says so: `email-integrity::messages.reason.{value}`. */
+    public function label(): string
+    {
+        return __("email-integrity::messages.reason.{$this->value}");
+    }
+
     /**
      * @internal Whether a row for this reason keys the inbox (its canonical() form) rather than the spelling: only the
      * inbox's owner can complain, while a bounce or a refusal may follow a stranger's typo.

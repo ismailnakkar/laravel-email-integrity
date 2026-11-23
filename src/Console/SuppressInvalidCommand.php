@@ -8,14 +8,10 @@ use EmailIntegrity\SuppressedAddress;
 use EmailIntegrity\SuppressionReason;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
 
 /** @internal */
 final class SuppressInvalidCommand extends Command
 {
-    /** Laravel's check of an address a mail provider takes: `filter` refuses a domain without a dot, as Resend does. */
-    private const RULE = 'email:strict,filter';
-
     private const CHUNK = 1000;
 
     protected $signature = 'email-integrity:suppress-invalid
@@ -23,7 +19,7 @@ final class SuppressInvalidCommand extends Command
         {column=email : The address column}
         {--dry-run : Print the counts and write nothing}';
 
-    protected $description = 'Suppress every stored address that fails email:strict,filter';
+    protected $description = 'Suppress every stored address that fails ' . SuppressedAddress::PROVIDER_FORMAT;
 
     public function handle(): int
     {
@@ -41,7 +37,7 @@ final class SuppressInvalidCommand extends Command
             $address = (string)$row->{$column};
             $checked++;
 
-            if (self::passes(SuppressedAddress::key($address, SuppressionReason::invalid))) {
+            if (! SuppressedAddress::malformed($address)) {
                 continue;
             }
 
@@ -54,21 +50,11 @@ final class SuppressInvalidCommand extends Command
             number_format($invalid),
             number_format($checked),
             "{$table}.{$column}",
-            self::RULE,
+            SuppressedAddress::PROVIDER_FORMAT,
             number_format($new),
         ));
 
         return self::SUCCESS;
-    }
-
-    /**
-     * Whether the rule takes the key, the form a row would hold: ` bob@gmail.com`, `bob@gmail.com.` and `bob@münchen.de`
-     * fail as typed but fold onto a working inbox, which their row would block. A null key (outside printable ASCII)
-     * fails: counted, never stored.
-     */
-    private static function passes(?string $key): bool
-    {
-        return $key !== null && Validator::make(['email' => $key], ['email' => self::RULE])->passes();
     }
 
     /** Whether suppress() would insert a row: the address has a key no row holds yet. */

@@ -7,6 +7,7 @@ namespace EmailIntegrity\Tests;
 use EmailIntegrity\DisposableDomains;
 use EmailIntegrity\EmailAddress;
 use EmailIntegrity\EmailIntegrity;
+use EmailIntegrity\Rules\AddressRules;
 use EmailIntegrity\Rules\NotDisposable;
 use EmailIntegrity\Rules\NotSuppressed;
 use EmailIntegrity\Rules\RoutableDomain;
@@ -18,6 +19,7 @@ use ReflectionMethod;
 /** 3.0 closed these; reopening one commits the package to it again. */
 class PublicApiTest extends TestCase
 {
+    #[TestWith([AddressRules::class])]
     #[TestWith([NotDisposable::class])]
     #[TestWith([NotSuppressed::class])]
     #[TestWith([RoutableDomain::class])]

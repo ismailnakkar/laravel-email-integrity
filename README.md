@@ -134,6 +134,23 @@ parameters are `{table},{canonical_column},{ignore_id}` (defaults `email_canonic
 `new UnclaimedMailbox($table, $canonical)`, with `->ignore($id, $idColumn)` as on `Rule::unique()`. It fails with your
 `validation.unique` message; reword it under `unclaimed_mailbox`, not `unique`.
 
+`AddressRules::for()` is the whole list for such a table, in the [Validation](#validation) order: `bail`, `email:strict`,
+a check of the address's form, `UnclaimedMailbox` on `email_canonical`, `not_suppressed`, `not_disposable`,
+`routable_domain`. Put `required`, `string` and your column's `max:` ahead of it, and any rule of your own after it:
+
+```php
+use EmailIntegrity\Rules\AddressRules;
+
+'email' => ['required', 'string', 'max:255', ...AddressRules::for('users', ignore: $user)],
+```
+
+`ignore` is the row an update form changes, a model or its id, as `UnclaimedMailbox::ignore()` takes it. The form check
+refuses, with your `validation.email` message, what `email:strict` passes and [`unreachable()`](#sending) counts by
+form: a local part outside printable ASCII (`jäck@gmail.com`) or a domain of bare digits (`a@192.0.2.1`). So a form
+never takes an address that a notice built on `unreachable()` then asks the member to change. `filter: true`
+makes the format `email:strict,filter`, which also refuses an internationalised domain as typed (`bob@münchen.de`,
+whose punycode form mail reaches): whether to accept one is your app's choice.
+
 Find the account at sign-in and password reset by `email_canonical`:
 
 ```php
@@ -231,16 +248,32 @@ use EmailIntegrity\SuppressionReason;
 SuppressedAddress::blocking($user->email);                            // the row that stops mail to it, or null
 SuppressedAddress::blocking(...$admins->pluck('email')->all());       // any of several
 SuppressedAddress::mailable($address);                                // EmailAddress::sendable() and not suppressed
+SuppressedAddress::unreachable($address);                             // no mail can ever reach it (below)
 SuppressedAddress::suppress($address, SuppressionReason::complained); // true for a new row
 SuppressedAddress::lift($address);                                    // the number of rows deleted
+SuppressedAddress::release($address);                                 // lift(), and whether the provider holds it too
 ```
 
 While suppression is off, `blocking()` answers null without a query. A new row fires Eloquent's `created` event.
+
+`unreachable()` is for a notice that asks a member to change their address. It is true when a send to the address
+would throw (`EmailAddress::sendable()`), when the form a row would hold fails `email:strict,filter`, as the
+[sweep](#addresses-already-stored) judges it, or, while suppression is on, when an SMTP server refused it (`invalid`).
+A bounce or a complaint is not counted: that inbox exists. Where any block matters, ask `blocking()` or `mailable()`.
+A page that offers a verification link says it could not arrive when
+`! SuppressedAddress::mailable($address) || SuppressedAddress::unreachable($address)`: blocked for any reason, or
+unreachable.
 
 To unblock an address, run `php artisan email-integrity:lift someone@example.com`. For a row the provider's webhook
 recorded (`$row->reason->heldByProvider()`: `bounced`, `complained`), remove it from the provider's own list too, or the
 next send comes back as the provider's block and suppresses it again; the command says so. An `invalid` row never
 reached that list.
+
+From your own page, `release()` does what the command does: it reads the rows that block the address, while
+suppression is off too, deletes them and returns a `ReleasedAddress`. Its `rows` is the number deleted (0 when nothing
+blocked the address) and `heldByProvider` says whether to tell whoever lifted it to clear the provider's list: true
+when a lifted row is `bounced` or `complained`, or when nothing was lifted, as that says nothing of the provider's list.
+`$row->reason->label()` says why a row blocks mail, in the current language.
 
 ### Refused at send time
 
@@ -268,10 +301,10 @@ php artisan email-integrity:suppress-invalid users
 ```
 
 Its arguments are `{table} {column=email}`. It checks each non-empty value against Laravel's `email:strict,filter`
-(`filter` refuses a domain without a dot, as Resend does) and suppresses each failure as `invalid`, keyed on the
-spelling; one outside printable ASCII is counted but never stored. It checks the form a row would hold, trimmed,
-lowercased, without a trailing dot and with the domain in punycode, so ` bob@gmail.com` or `bob@münchen.de` passes
-rather than block the inbox it folds onto. It prints
+(`strict` refuses a domain without a dot; `filter`, PHP's own check, also refuses one of bare digits such as
+`192.0.2.1`) and suppresses each failure as `invalid`, keyed on the spelling; one outside printable ASCII is counted but
+never stored. It checks the form a row would hold, trimmed, lowercased, without a trailing dot and with the domain in
+punycode, so ` bob@gmail.com` or `bob@münchen.de` passes rather than block the inbox it folds onto. It prints
 `3 of 5 addresses in users.email fail email:strict,filter; 2 newly suppressed.` (with `Dry run:` and `would be newly
 suppressed` for `--dry-run`, which writes nothing). It pages by the column, so the table needs no `id`, and a second
 run suppresses nothing new. Expect about 15 seconds per 100,000 rows.
@@ -316,9 +349,10 @@ A key the published file leaves out keeps its default, inside a group too. A lis
 
 ## Translations
 
-The package ships en, fr, ar and es: `email-integrity::messages.disposable`, `unroutable` and `suppressed`. To reword
-one, put only that key in `lang/vendor/email-integrity/{locale}/messages.php`; the others keep the package's lines.
-Add a language the same way, with every key.
+The package ships en, fr, ar and es: `email-integrity::messages.disposable`, `unroutable` and `suppressed` (the rules'
+messages) and `reason.bounced`, `reason.complained` and `reason.invalid` (`SuppressionReason::label()`). To reword one,
+put only that key in `lang/vendor/email-integrity/{locale}/messages.php`; the others keep the package's lines. Add a
+language the same way, with every key.
 
 ## API
 
@@ -331,14 +365,17 @@ All classes are under `EmailIntegrity\`.
   - `sendable($email)`: whether Symfony Mime accepts the bare address.
   - `listedIn($domain, $entries)`: whether an entry is the domain or a parent of it, both normalised as
     `domainOf()` does (`Mail.Example.com.` is covered by `example.com`).
-- **`SuppressedAddress`** (Eloquent model): `blocking(...$addresses)`, `mailable($address)`,
-  `suppress($address, $reason)`, `lift($address)`, `key($address, $reason)` (the stored form, or null).
+- **`SuppressedAddress`** (Eloquent model): `blocking(...$addresses)`, `mailable($address)`, `unreachable($address)`,
+  `suppress($address, $reason)`, `lift($address)`, `release($address)`, `key($address, $reason)` (the stored form, or
+  null).
+- **`ReleasedAddress`** (readonly, from `release()`): `rows`, `heldByProvider`.
 - **`SuppressionReason`** (enum): `bounced`, `complained`, `invalid`; `heldByProvider()` (whether the provider keeps its
-  own block too).
+  own block too), `label()` (why mail is blocked, translated).
 - **`Mail\RefusedRecipientGuard`**: an SMTP mailer's transport; `transport` is the one it wraps.
 - **`DisposableDomains`** (final, resolve from the container): `flush()` (reload from the file on next use).
 - **Rules** (final): `Rules\NotDisposable`, `Rules\RoutableDomain` (resolve from the container),
-  `Rules\NotSuppressed`, `Rules\UnclaimedMailbox`.
+  `Rules\NotSuppressed`, `Rules\UnclaimedMailbox`; `Rules\AddressRules::for($table, $ignore = null, $filter = false)`,
+  the list for an entered address.
 - **Cast:** `Casts\CanonicalEmail`.
 - **Controller:** `Http\SuppressionWebhook`.
 - **Commands:** `email-integrity:update`, `email-integrity:lift {address}`,
@@ -371,6 +408,56 @@ All classes are under `EmailIntegrity\`.
   ```
 
 ## Upgrading
+
+### From 3.0
+
+3.1 adds `SuppressedAddress::unreachable()` and `release()`, `SuppressionReason::label()` and `Rules\AddressRules`;
+nothing to change. `email-integrity:lift` now decides its provider warning from every row it lifts, read while
+suppression is off too: before, it read the first row `blocking()` found, and warned for any row while suppression was
+off. An app's own lang override needs no new key: `reason.*` falls back to the package's line.
+
+To adopt it, require `"ismailnakkar/laravel-email-integrity": "^3.1.0"`, then, in all three apps, `app/Models/User.php`:
+
+- `hasUnreachableEmail()` returns `SuppressedAddress::unreachable((string) $this->email)`.
+- `undeliverableAddress()` tests `! SuppressedAddress::mailable($address) || SuppressedAddress::unreachable($address)`,
+  as upfiles' did with its own shape check. The verify page now also names a pending or unverified address no mail
+  reaches by its form: in all three, one outside printable ASCII (`jäck@gmail.com`) or with a domain of bare digits
+  (`a@192.0.2.1`); in cuty and exe, a dotless one (`jane@gmail`) too.
+
+Then, per app:
+
+- **cuty** (`~/Projects/shorten`):
+  - `app/Models/User.php`: drop `EMAIL_FORMAT` (its other reader, `email_address_rules()`, changes below) and the
+    `SuppressionReason` and `Validator` imports if nothing else reads them. On the banner, a legacy internationalised
+    address (`bob@münchen.de`) stops counting, as Resend takes its punycode form; so does one with a space around it. An
+    empty address starts counting.
+  - `app/Helpers/functions.php`: `email_address_rules()` returns
+    `[...AddressRules::for('users', $member, filter: true), Rule::unique('users', 'email')->ignore($member)->whereNull('email_canonical')]`,
+    its legacy rule now after `routable_domain`. The forms take the same addresses: `filter` already refused what the
+    form check refuses.
+  - `app/Http/Controllers/Admin/UserController.php`: `liftSuppression()` takes
+    `$released = SuppressedAddress::release((string) $user->email)` and reads `$released->rows` and
+    `$released->heldByProvider` in place of the `blocking()` read and the `lift()` call.
+- **exe** (`~/Projects/exe-laravel`):
+  - `app/Models/User.php`: drop the `SuppressionReason` and `Validator` imports if nothing else reads them. On the
+    banner, an address outside printable ASCII (`jäck@example.com`) or with a domain of bare digits starts counting; one
+    with a space around it stops.
+  - `app/Rules/SignUpRules.php`: `email()` returns `[...AddressRules::for('users', $member), <the NULL
+    email_canonical closure>]`; delete `emailFormat()`, as neither of its readers, `email()` and
+    `User::hasUnreachableEmail()`, reads it any more. Sign-up, the email change and the admin's editor now refuse an
+    address outside printable ASCII or with a domain of bare digits, which they took before.
+  - `app/Http/Controllers/Admin/UserActionController.php`: `liftSuppression()` uses `release()`, as for cuty.
+  - Delete `app/View/SuppressionLabel.php`; `resources/views/admin/users/edit.blade.php` prints
+    `$suppression->reason->label()` and drops `@use('App\View\SuppressionLabel')`. The admin is English: same words.
+- **upfiles** (`~/Projects/upfiles`):
+  - `app/Models/User.php`: delete `hasMailableShape()`, which both methods above read. The banner changes as for
+    exe.
+  - `app/Helpers/functions.php`: `email_address_rules()` returns
+    `['required', 'string', 'max:191', ...AddressRules::for('users', $member), <the NULL email_canonical closure>]`;
+    `email_shape_rules()` stays for the contact and report forms. The account forms refuse what exe's now do.
+  - `app/Http/Controllers/Admin/UserActionController.php`: `liftSuppression()` uses `release()`, as for cuty.
+  - Delete `app/View/SuppressionLabel.php`; `resources/views/admin/users/edit.blade.php` builds the note from
+    `$suppression->reason->label()` and drops `@use('App\View\SuppressionLabel')`. The admin is English: same words.
 
 ### From 2.1
 

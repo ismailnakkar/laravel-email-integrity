@@ -100,4 +100,23 @@ class SendGuardTest extends TestCase
 
         $this->assertNull(SuppressedAddress::blocking('jane@gmail'));
     }
+
+    /** Every row it lifts counts, and they are read while suppression is off too. */
+    public function test_lift_warns_of_the_provider_by_the_rows_it_lifted(): void
+    {
+        SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::invalid);
+        SuppressedAddress::suppress('janedoe+x@gmail.com', SuppressionReason::complained);
+        SuppressedAddress::suppress('refused@example.com', SuppressionReason::invalid);
+        config(['email-integrity.suppression.enabled' => false]);
+
+        $this->artisan('email-integrity:lift', ['address' => 'jane.doe@gmail.com'])
+            ->expectsOutputToContain('Lifted 2')
+            ->expectsOutputToContain("mail provider's own suppression list")
+            ->assertExitCode(0);
+
+        $this->artisan('email-integrity:lift', ['address' => 'refused@example.com'])
+            ->expectsOutputToContain('Lifted 1')
+            ->doesntExpectOutputToContain("mail provider's own suppression list")
+            ->assertExitCode(0);
+    }
 }

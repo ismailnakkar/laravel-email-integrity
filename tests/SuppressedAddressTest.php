@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EmailIntegrity\Tests;
 
 use EmailIntegrity\EmailIntegrityServiceProvider;
+use EmailIntegrity\ReleasedAddress;
 use EmailIntegrity\SuppressedAddress;
 use EmailIntegrity\SuppressionReason;
 use Illuminate\Support\Facades\Exceptions;
@@ -86,6 +87,78 @@ class SuppressedAddressTest extends TestCase
         $this->assertSame(1, SuppressedAddress::lift('janedoe+x@gmail.com'));
         $this->assertNull(SuppressedAddress::blocking('jane.doe@gmail.com'));
         $this->assertNotNull(SuppressedAddress::blocking('member+x@corp.example'));
+    }
+
+    /** What the sweep would refuse, a send that would throw, or a refusal at send time; never a bounce or a complaint. */
+    public function test_unreachable_is_an_address_no_mail_can_reach(): void
+    {
+        SuppressedAddress::suppress('refused@example.com', SuppressionReason::invalid);
+        SuppressedAddress::suppress('bounced@example.com', SuppressionReason::bounced);
+        SuppressedAddress::suppress('complained@example.com', SuppressionReason::complained);
+
+        $this->assertTrue(SuppressedAddress::unreachable('Refused@Example.com'));
+        $this->assertTrue(SuppressedAddress::unreachable('jane@gmail'));
+        $this->assertTrue(SuppressedAddress::unreachable('a@192.0.2.1'));
+        $this->assertTrue(SuppressedAddress::unreachable('jäck@example.com'));
+        $this->assertTrue(SuppressedAddress::unreachable('carol@gmail.com.'));
+        $this->assertTrue(SuppressedAddress::unreachable('Jane <jane@example.com>'));
+        $this->assertTrue(SuppressedAddress::unreachable(''));
+
+        $this->assertFalse(SuppressedAddress::unreachable('bounced@example.com'));
+        $this->assertFalse(SuppressedAddress::unreachable('complained@example.com'));
+        $this->assertFalse(SuppressedAddress::unreachable('someone@example.com'));
+        // The form a row would hold, as the sweep judges it: these fold onto a working inbox.
+        $this->assertFalse(SuppressedAddress::unreachable('bob@münchen.de'));
+        $this->assertFalse(SuppressedAddress::unreachable(' bob@gmail.com'));
+
+        config(['email-integrity.suppression.enabled' => false]);
+
+        $this->assertFalse(SuppressedAddress::unreachable('refused@example.com'));
+        $this->assertTrue(SuppressedAddress::unreachable('jane@gmail'));
+    }
+
+    /** Two rows block the spelling: a complaint on its inbox, found first by id and by key, and a refusal of the spelling. */
+    public function test_a_refusal_counts_beside_a_complaint_on_the_inbox(): void
+    {
+        SuppressedAddress::suppress('janedoe@gmail.com', SuppressionReason::complained);
+        SuppressedAddress::suppress('janedoe@googlemail.com', SuppressionReason::invalid);
+
+        $this->assertTrue(SuppressedAddress::unreachable('janedoe@googlemail.com'));
+    }
+
+    public function test_release_lifts_and_says_whether_the_provider_may_still_hold_the_address(): void
+    {
+        SuppressedAddress::suppress('refused@example.com', SuppressionReason::invalid);
+
+        $this->assertEquals(new ReleasedAddress(rows: 1, heldByProvider: false), SuppressedAddress::release('Refused@Example.com'));
+        $this->assertEquals(new ReleasedAddress(rows: 0, heldByProvider: true), SuppressedAddress::release('refused@example.com'));
+
+        // Every row lifted counts, not the first one found: the complaint on the inbox is on the provider's list.
+        SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::invalid);
+        SuppressedAddress::suppress('janedoe+x@gmail.com', SuppressionReason::complained);
+        SuppressedAddress::suppress('someone@example.com', SuppressionReason::bounced);
+
+        $this->assertEquals(new ReleasedAddress(rows: 2, heldByProvider: true), SuppressedAddress::release('jane.doe@gmail.com'));
+        $this->assertSame(['someone@example.com'], SuppressedAddress::query()->pluck('email')->all());
+    }
+
+    public function test_release_reads_the_rows_while_suppression_is_off(): void
+    {
+        SuppressedAddress::suppress('refused@example.com', SuppressionReason::invalid);
+        config(['email-integrity.suppression.enabled' => false]);
+
+        $this->assertEquals(new ReleasedAddress(rows: 1, heldByProvider: false), SuppressedAddress::release('refused@example.com'));
+    }
+
+    public function test_each_reason_has_a_label_in_the_current_language(): void
+    {
+        $this->assertSame('The address bounced', SuppressionReason::bounced->label());
+        $this->assertSame('The recipient marked a mail as spam', SuppressionReason::complained->label());
+        $this->assertSame('The mail server refused the address as invalid', SuppressionReason::invalid->label());
+
+        $this->app->setLocale('fr');
+
+        $this->assertSame("Le serveur de messagerie a refusé l'adresse comme invalide", SuppressionReason::invalid->label());
     }
 
     public function test_a_block_on_an_own_inbox_is_reported(): void

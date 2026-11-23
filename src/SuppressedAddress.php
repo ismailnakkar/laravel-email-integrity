@@ -6,6 +6,7 @@ namespace EmailIntegrity;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 use RuntimeException;
 
 /**
@@ -18,6 +19,12 @@ use RuntimeException;
  */
 class SuppressedAddress extends Model
 {
+    /**
+     * @internal Laravel's check of an address a mail provider takes: `strict` refuses a domain without a dot, and `filter`
+     * (PHP's own check) one of bare digits such as `192.0.2.1`.
+     */
+    public const PROVIDER_FORMAT = 'email:strict,filter';
+
     /** Printable ASCII, 1 to 254 characters, not ending in a space: see key(). */
     private const STORABLE_KEY_PATTERN = '/^[\x20-\x7E]{0,253}[\x21-\x7E]$/D';
 
@@ -58,6 +65,39 @@ class SuppressedAddress extends Model
         return EmailAddress::sendable($address) && self::blocking($address) === null;
     }
 
+    /**
+     * Whether no mail can reach the address: by its form (unreachableByForm()), or, while suppression is on, because an
+     * SMTP server refused it as invalid. A bounce or a complaint is not counted: that inbox exists.
+     */
+    public static function unreachable(string $address): bool
+    {
+        return self::unreachableByForm($address)
+            || (config('email-integrity.suppression.enabled')
+                && self::query()->whereIn('email', self::keys($address))->where('reason', SuppressionReason::invalid)->exists());
+    }
+
+    /**
+     * @internal unreachable() without the table, which Rules\AddressRules refuses, so a form never takes an address the
+     * members' notice then calls unreachable: a send to it would throw (EmailAddress::sendable()), or the form a row
+     * would hold fails PROVIDER_FORMAT (malformed()).
+     */
+    public static function unreachableByForm(string $address): bool
+    {
+        return ! EmailAddress::sendable($address) || self::malformed($address);
+    }
+
+    /**
+     * @internal Whether the form a row would hold, key() for `invalid`, fails PROVIDER_FORMAT: ` bob@gmail.com`,
+     * `bob@gmail.com.` and `bob@münchen.de` fail as typed but fold onto a working inbox. True with no such form (outside
+     * printable ASCII, or over 254 characters).
+     */
+    public static function malformed(string $address): bool
+    {
+        $key = self::key($address, SuppressionReason::invalid);
+
+        return $key === null || Validator::make(['email' => $key], ['email' => self::PROVIDER_FORMAT])->fails();
+    }
+
     /** Insert-if-absent, so a redelivered event is a no-op and the first reason sticks. True for a new row. */
     public static function suppress(string $address, SuppressionReason $reason): bool
     {
@@ -88,6 +128,25 @@ class SuppressedAddress extends Model
     public static function lift(string $address): int
     {
         return self::query()->whereIn('email', self::keys($address))->delete();
+    }
+
+    /**
+     * lift(), saying whether the mail provider may still hold the address (ReleasedAddress::$heldByProvider), from the
+     * rows read before they go. Reads and deletes while suppression is off too, as lift() does.
+     */
+    public static function release(string $address): ReleasedAddress
+    {
+        $rows = self::query()->whereIn('email', self::keys($address))->get();
+
+        // Nothing lifted says nothing of the provider's own list: it may hold the address still.
+        if ($rows->isEmpty()) {
+            return new ReleasedAddress(rows: 0, heldByProvider: true);
+        }
+
+        return new ReleasedAddress(
+            rows: self::query()->whereKey($rows->modelKeys())->delete(),
+            heldByProvider: $rows->contains(fn (self $row): bool => $row->reason->heldByProvider()),
+        );
     }
 
     /** @return array<string, string> */

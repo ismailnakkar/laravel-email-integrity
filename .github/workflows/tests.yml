@@ -10,12 +10,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # The whole grid, on pull requests and when run by hand before a tag. A push to main runs only `newest`.
   test:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     strategy:
       fail-fast: false
@@ -33,9 +36,9 @@ jobs:
           - php: '8.2'
             laravel: '13.*'
 
-    name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }} · ${{ matrix.deps }}
+    name: &name PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }} · ${{ matrix.deps }}
 
-    steps:
+    steps: &steps
       - uses: actions/checkout@v7
 
       - uses: shivammathur/setup-php@v2
@@ -64,3 +67,15 @@ jobs:
         run: composer analyse
 
       - run: vendor/bin/phpunit
+
+  # A push to main: the grid's newest row, which also runs the rest of the check.
+  newest:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        include:
+          - { php: '8.5', laravel: '13.*', testbench: '11.*', deps: prefer-stable }
+    name: *name
+    steps: *steps
