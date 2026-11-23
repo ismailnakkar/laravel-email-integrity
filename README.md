@@ -416,49 +416,6 @@ nothing to change. `email-integrity:lift` now decides its provider warning from 
 suppression is off too: before, it read the first row `blocking()` found, and warned for any row while suppression was
 off. An app's own lang override needs no new key: `reason.*` falls back to the package's line.
 
-To adopt it, require `"ismailnakkar/laravel-email-integrity": "^3.1.0"`, then, in all three apps, `app/Models/User.php`:
-
-- `hasUnreachableEmail()` returns `SuppressedAddress::unreachable((string) $this->email)`.
-- `undeliverableAddress()` tests `! SuppressedAddress::mailable($address) || SuppressedAddress::unreachable($address)`,
-  as upfiles' did with its own shape check. The verify page now also names a pending or unverified address no mail
-  reaches by its form: in all three, one outside printable ASCII (`jäck@gmail.com`) or with a domain of bare digits
-  (`a@192.0.2.1`); in cuty and exe, a dotless one (`jane@gmail`) too.
-
-Then, per app:
-
-- **cuty** (`~/Projects/shorten`):
-  - `app/Models/User.php`: drop `EMAIL_FORMAT` (its other reader, `email_address_rules()`, changes below) and the
-    `SuppressionReason` and `Validator` imports if nothing else reads them. On the banner, a legacy internationalised
-    address (`bob@münchen.de`) stops counting, as Resend takes its punycode form; so does one with a space around it. An
-    empty address starts counting.
-  - `app/Helpers/functions.php`: `email_address_rules()` returns
-    `[...AddressRules::for('users', $member, filter: true), Rule::unique('users', 'email')->ignore($member)->whereNull('email_canonical')]`,
-    its legacy rule now after `routable_domain`. The forms take the same addresses: `filter` already refused what the
-    form check refuses.
-  - `app/Http/Controllers/Admin/UserController.php`: `liftSuppression()` takes
-    `$released = SuppressedAddress::release((string) $user->email)` and reads `$released->rows` and
-    `$released->heldByProvider` in place of the `blocking()` read and the `lift()` call.
-- **exe** (`~/Projects/exe-laravel`):
-  - `app/Models/User.php`: drop the `SuppressionReason` and `Validator` imports if nothing else reads them. On the
-    banner, an address outside printable ASCII (`jäck@example.com`) or with a domain of bare digits starts counting; one
-    with a space around it stops.
-  - `app/Rules/SignUpRules.php`: `email()` returns `[...AddressRules::for('users', $member), <the NULL
-    email_canonical closure>]`; delete `emailFormat()`, as neither of its readers, `email()` and
-    `User::hasUnreachableEmail()`, reads it any more. Sign-up, the email change and the admin's editor now refuse an
-    address outside printable ASCII or with a domain of bare digits, which they took before.
-  - `app/Http/Controllers/Admin/UserActionController.php`: `liftSuppression()` uses `release()`, as for cuty.
-  - Delete `app/View/SuppressionLabel.php`; `resources/views/admin/users/edit.blade.php` prints
-    `$suppression->reason->label()` and drops `@use('App\View\SuppressionLabel')`. The admin is English: same words.
-- **upfiles** (`~/Projects/upfiles`):
-  - `app/Models/User.php`: delete `hasMailableShape()`, which both methods above read. The banner changes as for
-    exe.
-  - `app/Helpers/functions.php`: `email_address_rules()` returns
-    `['required', 'string', 'max:191', ...AddressRules::for('users', $member), <the NULL email_canonical closure>]`;
-    `email_shape_rules()` stays for the contact and report forms. The account forms refuse what exe's now do.
-  - `app/Http/Controllers/Admin/UserActionController.php`: `liftSuppression()` uses `release()`, as for cuty.
-  - Delete `app/View/SuppressionLabel.php`; `resources/views/admin/users/edit.blade.php` builds the note from
-    `$suppression->reason->label()` and drops `@use('App\View\SuppressionLabel')`. The admin is English: same words.
-
 ### From 2.1
 
 3.0 closes API no app needs:
