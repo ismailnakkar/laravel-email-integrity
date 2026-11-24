@@ -158,7 +158,7 @@ class SuppressedAddressTest extends TestCase
 
         $this->app->setLocale('fr');
 
-        $this->assertSame("Le serveur de messagerie a refusé l'adresse comme invalide", SuppressionReason::invalid->label());
+        $this->assertSame('Le serveur de messagerie a refusé l’adresse comme invalide', SuppressionReason::invalid->label());
     }
 
     public function test_a_block_on_an_own_inbox_is_reported(): void
