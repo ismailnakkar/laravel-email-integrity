@@ -20,15 +20,15 @@ class ConfigTest extends TestCase
     public function test_a_partial_group_keeps_its_other_defaults(): void
     {
         $this->publish([
-            'disposable'  => ['timeout' => 60],
+            'disposable'  => ['min_domains' => 50],
             'host'        => ['fail_open' => false],
             'suppression' => ['enabled' => true, 'webhook' => ['secret' => 'whsec_x']],
         ]);
 
-        $this->assertSame(60, config('email-integrity.disposable.timeout'));
-        $this->assertSame(1000, config('email-integrity.disposable.min_domains'));
+        $this->assertSame(50, config('email-integrity.disposable.min_domains'));
+        $this->assertSame(storage_path('framework/disposable_domains.json'), config('email-integrity.disposable.storage'));
         $this->assertFalse(config('email-integrity.host.fail_open'));
-        $this->assertSame(3600, config('email-integrity.host.cache_ttl'));
+        $this->assertTrue(config('email-integrity.host.enabled'));
         $this->assertTrue(config('email-integrity.suppression.enabled'));
         $this->assertSame([], config('email-integrity.suppression.own_inboxes'));
         $this->assertSame('whsec_x', config('email-integrity.suppression.webhook.secret'));

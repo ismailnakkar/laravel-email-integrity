@@ -124,15 +124,10 @@ class SuppressedAddress extends Model
         return true;
     }
 
-    /** Deletes the rows blocking() would find for the address. */
-    public static function lift(string $address): int
-    {
-        return self::query()->whereIn('email', self::keys($address))->delete();
-    }
-
     /**
-     * lift(), saying whether the mail provider may still hold the address (ReleasedAddress::$heldByProvider), from the
-     * rows read before they go. Reads and deletes while suppression is off too, as lift() does.
+     * Deletes the rows blocking() would find for the address, saying whether the mail provider may still hold it
+     * (ReleasedAddress::$heldByProvider), from the rows read before they go. Reads and deletes while suppression is off
+     * too.
      */
     public static function release(string $address): ReleasedAddress
     {

@@ -12,6 +12,8 @@ class EmailIntegrity
 {
     private const HOST_KEY_PREFIX = 'email-integrity:host:';
 
+    private const HOST_CHECK_CACHE_SECONDS = 3600;
+
     private const RESOLVER_DOWN_KEY = 'email-integrity:resolver-down';
 
     /** Remembered briefly: a resolver that times out would make every signup wait out all four lookups. */
@@ -50,7 +52,7 @@ class EmailIntegrity
         }
 
         // TTL 0 stores nothing, so a resolver blip is never cached as a verdict.
-        $ttl = fn (?bool $answer): int => $answer === null ? 0 : (int)($host['cache_ttl'] ?? 3600);
+        $ttl = fn (?bool $answer): int => $answer === null ? 0 : self::HOST_CHECK_CACHE_SECONDS;
         $store = $this->cache->store();
 
         $resolved = $store->remember(

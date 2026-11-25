@@ -23,8 +23,6 @@ return [
 
         'storage' => storage_path('framework/disposable_domains.json'),
 
-        'timeout' => 30,
-
         // A source returning fewer aborts the update and keeps the previous list.
         'min_domains' => 1000,
     ],
@@ -33,7 +31,6 @@ return [
     'host' => [
         'enabled'   => env('EMAIL_INTEGRITY_HOST_CHECK', true),
         'fail_open' => true,
-        'cache_ttl' => 3600,
     ],
 
     // Turn on with a literal true, not an env switch a deploy can forget. `enabled` above does not touch it.

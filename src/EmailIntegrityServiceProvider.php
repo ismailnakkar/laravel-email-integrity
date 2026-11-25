@@ -30,7 +30,8 @@ use Illuminate\Validation\Factory as ValidationFactory;
 use Illuminate\Validation\InvokableValidationRule;
 use Illuminate\Validation\Validator;
 
-class EmailIntegrityServiceProvider extends ServiceProvider
+/** @internal Registered by package auto-discovery. */
+final class EmailIntegrityServiceProvider extends ServiceProvider
 {
     public function register(): void
     {

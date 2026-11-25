@@ -7,6 +7,7 @@ namespace EmailIntegrity\Tests;
 use EmailIntegrity\DisposableDomains;
 use EmailIntegrity\EmailAddress;
 use EmailIntegrity\EmailIntegrity;
+use EmailIntegrity\EmailIntegrityServiceProvider;
 use EmailIntegrity\Rules\AddressRules;
 use EmailIntegrity\Rules\NotDisposable;
 use EmailIntegrity\Rules\NotSuppressed;
@@ -16,7 +17,7 @@ use PHPUnit\Framework\Attributes\TestWith;
 use ReflectionClass;
 use ReflectionMethod;
 
-/** 3.0 closed these; reopening one commits the package to it again. */
+/** 3.0 and 4.0 closed these; reopening one commits the package to it again. */
 class PublicApiTest extends TestCase
 {
     #[TestWith([AddressRules::class])]
@@ -25,6 +26,7 @@ class PublicApiTest extends TestCase
     #[TestWith([RoutableDomain::class])]
     #[TestWith([UnclaimedMailbox::class])]
     #[TestWith([DisposableDomains::class])]
+    #[TestWith([EmailIntegrityServiceProvider::class])]
     public function test_a_leaf_class_is_final(string $class): void
     {
         $this->assertTrue((new ReflectionClass($class))->isFinal());

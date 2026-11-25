@@ -87,8 +87,8 @@ EmailAddress::sendable($address); // false where a send to this bare address wou
 ### The routable check
 
 Keep `routable_domain` on entry forms, not on payout or login paths: it depends on DNS. It passes a domain with an MX
-or an A/AAAA record, and refuses an RFC 7505 null MX. An unreachable resolver is remembered for 30 seconds, not cached
-for `cache_ttl`.
+or an A/AAAA record, and refuses an RFC 7505 null MX. Its answer is cached for an hour; an unreachable resolver is
+remembered for 30 seconds.
 
 ## One mailbox, one account
 
@@ -250,8 +250,7 @@ SuppressedAddress::blocking(...$admins->pluck('email')->all());       // any of 
 SuppressedAddress::mailable($address);                                // EmailAddress::sendable() and not suppressed
 SuppressedAddress::unreachable($address);                             // no mail can ever reach it (below)
 SuppressedAddress::suppress($address, SuppressionReason::complained); // true for a new row
-SuppressedAddress::lift($address);                                    // the number of rows deleted
-SuppressedAddress::release($address);                                 // lift(), and whether the provider holds it too
+SuppressedAddress::release($address);                                 // unblocks it (below)
 ```
 
 While suppression is off, `blocking()` answers null without a query. A new row fires Eloquent's `created` event.
@@ -329,11 +328,9 @@ recipients. A `Mailable` sent with `Mail::to()` is not covered: ask `EmailAddres
 | `deny`                       | `[]`                      | Domains refused as disposable.                            |
 | `disposable.sources`         | one URL                   | URLs of JSON arrays of domains, merged by the update.     |
 | `disposable.storage`         | `storage/framework/…`     | Full path of the merged list file.                        |
-| `disposable.timeout`         | `30`                      | Seconds per source request.                               |
 | `disposable.min_domains`     | `1000`                    | Fewer from any source keeps the previous list.            |
 | `host.enabled`               | `true`                    | Off, `routable_domain` passes everything.                 |
 | `host.fail_open`             | `true`                    | The answer while the resolver is unreachable.             |
-| `host.cache_ttl`             | `3600`                    | Seconds a resolver's answer is cached.                    |
 | `suppression.enabled`        | `false`                   | Suppression on or off; `enabled` does not touch it.       |
 | `suppression.own_inboxes`    | `[]`                      | Your own inboxes: a block on one is passed to `report()`. |
 | `suppression.webhook.path`   | `email-integrity/webhook` | The webhook's URI; null registers no route.               |
@@ -366,8 +363,7 @@ All classes are under `EmailIntegrity\`.
   - `listedIn($domain, $entries)`: whether an entry is the domain or a parent of it, both normalised as
     `domainOf()` does (`Mail.Example.com.` is covered by `example.com`).
 - **`SuppressedAddress`** (Eloquent model): `blocking(...$addresses)`, `mailable($address)`, `unreachable($address)`,
-  `suppress($address, $reason)`, `lift($address)`, `release($address)`, `key($address, $reason)` (the stored form, or
-  null).
+  `suppress($address, $reason)`, `release($address)`, `key($address, $reason)` (the stored form, or null).
 - **`ReleasedAddress`** (readonly, from `release()`): `rows`, `heldByProvider`.
 - **`SuppressionReason`** (enum): `bounced`, `complained`, `invalid`; `heldByProvider()` (whether the provider keeps its
   own block too), `label()` (why mail is blocked, translated).
@@ -408,6 +404,17 @@ All classes are under `EmailIntegrity\`.
   ```
 
 ## Upgrading
+
+### From 3.1
+
+4.0 drops API that another call or a fixed value covers, and closes the provider:
+
+- `SuppressedAddress::lift($address)` is gone: call `SuppressedAddress::release($address)`, which deletes the same rows.
+  Where you read `lift()`'s count, read `release($address)->rows`.
+- `disposable.timeout` and `host.cache_ttl` are no longer read: a source request waits 30 seconds and a resolver's
+  answer is cached for an hour. Delete both keys from a published config.
+- `EmailIntegrityServiceProvider` is final and `@internal`: package auto-discovery registers it. A provider that
+  extends it extends `Illuminate\Support\ServiceProvider` instead and runs beside it.
 
 ### From 3.0
 

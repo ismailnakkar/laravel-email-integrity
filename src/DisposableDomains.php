@@ -11,6 +11,8 @@ use RuntimeException;
 /** The fetched list, matched exactly: it names every domain it blocks. */
 final class DisposableDomains
 {
+    private const SOURCE_TIMEOUT_SECONDS = 30;
+
     /** @var array<string, true>|null */
     private ?array $domains = null;
 
@@ -35,13 +37,12 @@ final class DisposableDomains
     public function update(): int
     {
         $sources = (array)$this->config->get('email-integrity.disposable.sources', []);
-        $timeout = (int)$this->config->get('email-integrity.disposable.timeout', 30);
         $minimum = (int)$this->config->get('email-integrity.disposable.min_domains', 1000);
 
         $merged = [];
 
         foreach ($sources as $url) {
-            foreach ($this->fetch((string)$url, $timeout, $minimum) as $domain) {
+            foreach ($this->fetch((string)$url, $minimum) as $domain) {
                 if (is_string($domain) && ($domain = $this->normalise($domain)) !== '') {
                     $merged[$domain] = true;
                 }
@@ -75,9 +76,9 @@ final class DisposableDomains
     }
 
     /** @return array<int, mixed> */
-    private function fetch(string $url, int $timeout, int $minimum): array
+    private function fetch(string $url, int $minimum): array
     {
-        $domains = Http::timeout($timeout)->get($url)->throw()->json();
+        $domains = Http::timeout(self::SOURCE_TIMEOUT_SECONDS)->get($url)->throw()->json();
 
         // Per source: a truncated second list would otherwise shrink the merged one silently.
         if (! is_array($domains) || $domains === [] || count($domains) < $minimum) {

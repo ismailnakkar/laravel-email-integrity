@@ -78,13 +78,13 @@ class SuppressedAddressTest extends TestCase
         $this->assertSame(SuppressionReason::bounced, SuppressedAddress::query()->sole()->reason);
     }
 
-    public function test_lift_removes_exactly_what_blocks_the_address(): void
+    public function test_release_removes_exactly_what_blocks_the_address(): void
     {
         SuppressedAddress::suppress('Jane.Doe@gmail.com', SuppressionReason::complained);
         SuppressedAddress::suppress('member+x@corp.example', SuppressionReason::bounced);
 
-        $this->assertSame(0, SuppressedAddress::lift('member@corp.example'));
-        $this->assertSame(1, SuppressedAddress::lift('janedoe+x@gmail.com'));
+        $this->assertSame(0, SuppressedAddress::release('member@corp.example')->rows);
+        $this->assertSame(1, SuppressedAddress::release('janedoe+x@gmail.com')->rows);
         $this->assertNull(SuppressedAddress::blocking('jane.doe@gmail.com'));
         $this->assertNotNull(SuppressedAddress::blocking('member+x@corp.example'));
     }
