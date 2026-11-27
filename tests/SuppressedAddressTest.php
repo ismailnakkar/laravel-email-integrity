@@ -8,8 +8,12 @@ use EmailIntegrity\EmailIntegrityServiceProvider;
 use EmailIntegrity\ReleasedAddress;
 use EmailIntegrity\SuppressedAddress;
 use EmailIntegrity\SuppressionReason;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
+use InvalidArgumentException;
 use RuntimeException;
 
 class SuppressedAddressTest extends TestCase
@@ -115,6 +119,80 @@ class SuppressedAddressTest extends TestCase
 
         $this->assertFalse(SuppressedAddress::unreachable('refused@example.com'));
         $this->assertTrue(SuppressedAddress::unreachable('jane@gmail'));
+    }
+
+    /** mailable() and not unreachable(), for every kind of address either judges, in one table read. */
+    /** The subquery keys a row as key() does: a bounce or an invalid on the spelling, a complaint on the inbox. */
+    public function test_matching_finds_the_members_a_row_stops_mail_to(): void
+    {
+        Schema::create('members', static function (Blueprint $table): void {
+            $table->id();
+            $table->string('email');
+            $table->string('email_canonical')->nullable();
+        });
+        $ids = [];
+
+        foreach ([
+            'spelling'         => ['Jane.Doe+News@GoogleMail.com', 'janedoe@gmail.com'],
+            'other spelling'   => ['janedoe@gmail.com', 'janedoe@gmail.com'],
+            'inbox'            => ['bob.smith@gmail.com', 'bobsmith@gmail.com'],
+            'no canonical'     => ['Ann@Example.com', null],
+            'invalid spelling' => ['typo@example.org', 'typo@example.org'],
+            'clean'            => ['clean@example.net', 'clean@example.net'],
+        ] as $name => [$email, $canonical]) {
+            $ids[$name] = DB::table('members')->insertGetId(['email' => $email, 'email_canonical' => $canonical]);
+        }
+        SuppressedAddress::suppress('jane.doe+news@googlemail.com', SuppressionReason::bounced);
+        SuppressedAddress::suppress('Bob.Smith+x@googlemail.com', SuppressionReason::complained);
+        SuppressedAddress::suppress('ann@example.com', SuppressionReason::complained);
+        SuppressedAddress::suppress('TYPO@example.org', SuppressionReason::invalid);
+        $matched = static fn (?string $canonical = 'members.email_canonical'): array => DB::table('members')
+            ->whereExists(SuppressedAddress::matching('members.email', $canonical))->orderBy('id')->pluck('id')->all();
+
+        // The bounce stops one spelling, not the inbox's other one; the complaint the inbox, whichever spelling.
+        $this->assertSame([$ids['spelling'], $ids['inbox'], $ids['no canonical'], $ids['invalid spelling']], $matched());
+        // With no canonical column a complaint is compared with the spelling.
+        $this->assertSame([$ids['spelling'], $ids['no canonical'], $ids['invalid spelling']], $matched(null));
+        $this->assertSame([$ids['other spelling'], $ids['clean']], DB::table('members')
+            ->whereNotExists(SuppressedAddress::matching('members.email', 'members.email_canonical'))->orderBy('id')->pluck('id')->all());
+
+        config(['email-integrity.suppression.enabled' => false]);
+        $this->assertSame([], $matched());
+    }
+
+    public function test_matching_needs_table_qualified_columns(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        SuppressedAddress::matching('email');
+    }
+
+    public function test_deliverable_is_mailable_and_not_unreachable_in_one_read(): void
+    {
+        SuppressedAddress::suppress('refused@example.com', SuppressionReason::invalid);
+        SuppressedAddress::suppress('bounced@example.com', SuppressionReason::bounced);
+        SuppressedAddress::suppress('jane.doe@gmail.com', SuppressionReason::complained);
+        $addresses = [
+            'someone@example.com', 'Refused@Example.com', 'bounced@example.com', 'janedoe+x@gmail.com', 'jane@gmail',
+            'a@192.0.2.1', 'carol@gmail.com.', 'bob@münchen.de', ' bob@gmail.com', 'Jane <jane@example.com>', '',
+        ];
+
+        foreach ($addresses as $address) {
+            $pair = SuppressedAddress::mailable($address) && ! SuppressedAddress::unreachable($address);
+            $this->assertSame($pair, SuppressedAddress::deliverable($address), $address);
+        }
+        $this->assertTrue(SuppressedAddress::deliverable('someone@example.com'));
+        $this->assertFalse(SuppressedAddress::deliverable('Refused@Example.com'));
+        $this->assertFalse(SuppressedAddress::deliverable('carol@gmail.com.'));
+
+        DB::enableQueryLog();
+        SuppressedAddress::deliverable('someone@example.com');
+        $this->assertCount(1, DB::getQueryLog());
+
+        config(['email-integrity.suppression.enabled' => false]);
+
+        $this->assertTrue(SuppressedAddress::deliverable('refused@example.com'));
+        $this->assertFalse(SuppressedAddress::deliverable('jane@gmail'));
     }
 
     /** Two rows block the spelling: a complaint on its inbox, found first by id and by key, and a refusal of the spelling. */

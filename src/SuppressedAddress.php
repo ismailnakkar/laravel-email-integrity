@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace EmailIntegrity;
 
+use Closure;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -63,6 +66,15 @@ class SuppressedAddress extends Model
     public static function mailable(mixed $address): bool
     {
         return EmailAddress::sendable($address) && self::blocking($address) === null;
+    }
+
+    /**
+     * Whether a mail sent to the address can arrive, for a link someone must open: mailable() and not unreachable(), in
+     * one table read, as the row unreachable() looks for (`invalid`, keyed by the spelling) is one blocking() finds.
+     */
+    public static function deliverable(string $address): bool
+    {
+        return self::mailable($address) && ! self::unreachableByForm($address);
     }
 
     /**
@@ -142,6 +154,52 @@ class SuppressedAddress extends Model
             rows: self::query()->whereKey($rows->modelKeys())->delete(),
             heldByProvider: $rows->contains(fn (self $row): bool => $row->reason->heldByProvider()),
         );
+    }
+
+    /**
+     * Subquery for whereExists()/whereNotExists(): a row stops mail to the address in $emailColumn, keyed as key() keys
+     * it: a bounce or an invalid on the spelling, a complaint on the inbox in $canonicalColumn (EmailAddress::canonical()
+     * of the address, as laravel-email-integrity's cast writes it; the spelling where that is null, or with no column).
+     * Both table-qualified. Nothing matches while suppression is off, as blocking() blocks nothing. SQL can't punycode
+     * a domain, so an address with a non-ASCII domain never matches; the send guard still stops its mail.
+     *
+     * @return Closure(QueryBuilder): void
+     */
+    public static function matching(string $emailColumn, ?string $canonicalColumn = null): Closure
+    {
+        foreach (array_filter([$emailColumn, $canonicalColumn]) as $column) {
+            if (! str_contains($column, '.')) {
+                throw new InvalidArgumentException("SuppressedAddress::matching() needs a table-qualified column, such as 'users.email', not '{$column}'.");
+            }
+        }
+
+        $byInbox = array_values(array_filter(SuppressionReason::cases(), static fn (SuppressionReason $reason): bool => $reason->keysInbox()));
+        $bySpelling = array_values(array_filter(SuppressionReason::cases(), static fn (SuppressionReason $reason): bool => ! $reason->keysInbox()));
+        $enabled = (bool)config('email-integrity.suppression.enabled');
+
+        return static function (QueryBuilder $query) use ($emailColumn, $canonicalColumn, $byInbox, $bySpelling, $enabled): void {
+            // Aliased so an outer `suppressed_addresses.email` still means the outer row.
+            $query->from('suppressed_addresses as matched_addresses');
+
+            if (! $enabled) {
+                $query->whereRaw('1 = 0');
+
+                return;
+            }
+            $grammar = $query->getGrammar();
+            // Every key is lowercased ASCII, so lower() is the same fold on every database, whatever the column's collation.
+            $spelling = 'lower(' . $grammar->wrap($emailColumn) . ')';
+            $inbox = $canonicalColumn === null ? $spelling : 'coalesce(' . $grammar->wrap($canonicalColumn) . ', ' . $spelling . ')';
+            $key = $grammar->wrap('matched_addresses.email');
+
+            $query->where(static fn (QueryBuilder $row) => $row
+                ->where(static fn (QueryBuilder $bounce) => $bounce->whereIn('matched_addresses.reason', $bySpelling)
+                    // @phpstan-ignore argument.type (not literal only for the column names, wrapped by the grammar)
+                    ->whereRaw("{$key} = {$spelling}"))
+                ->orWhere(static fn (QueryBuilder $complaint) => $complaint->whereIn('matched_addresses.reason', $byInbox)
+                    // @phpstan-ignore argument.type (as above)
+                    ->whereRaw("{$key} = {$inbox}")));
+        };
     }
 
     /** @return array<string, string> */

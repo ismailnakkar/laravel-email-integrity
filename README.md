@@ -249,9 +249,21 @@ SuppressedAddress::blocking($user->email);                            // the row
 SuppressedAddress::blocking(...$admins->pluck('email')->all());       // any of several
 SuppressedAddress::mailable($address);                                // EmailAddress::sendable() and not suppressed
 SuppressedAddress::unreachable($address);                             // no mail can ever reach it (below)
+SuppressedAddress::deliverable($address);                             // mailable() and not unreachable(): a link can arrive
 SuppressedAddress::suppress($address, SuppressionReason::complained); // true for a new row
 SuppressedAddress::release($address);                                 // unblocks it (below)
 ```
+
+A query over your users skips the suppressed ones with the same keys, in SQL:
+
+```php
+User::query()->whereNotExists(SuppressedAddress::matching('users.email', 'users.email_canonical'));
+```
+
+It matches a bounce or an invalid on the spelling and a complaint on the inbox in the second column (`canonical()` of
+the address, as the cast writes it; the spelling where it is null, or with no second column). Both columns are
+table-qualified. Nothing matches while suppression is off. SQL can't punycode a domain, so an address with a non-ASCII
+domain never matches; the send guard still stops its mail.
 
 While suppression is off, `blocking()` answers null without a query. A new row fires Eloquent's `created` event.
 
@@ -259,9 +271,8 @@ While suppression is off, `blocking()` answers null without a query. A new row f
 would throw (`EmailAddress::sendable()`), when the form a row would hold fails `email:strict,filter`, as the
 [sweep](#addresses-already-stored) judges it, or, while suppression is on, when an SMTP server refused it (`invalid`).
 A bounce or a complaint is not counted: that inbox exists. Where any block matters, ask `blocking()` or `mailable()`.
-A page that offers a verification link says it could not arrive when
-`! SuppressedAddress::mailable($address) || SuppressedAddress::unreachable($address)`: blocked for any reason, or
-unreachable.
+A page that offers a verification link says it could not arrive when `! SuppressedAddress::deliverable($address)`:
+blocked for any reason, or unreachable. It is `mailable()` and not `unreachable()` in one table read.
 
 To unblock an address, run `php artisan email-integrity:lift someone@example.com`. For a row the provider's webhook
 recorded (`$row->reason->heldByProvider()`: `bounced`, `complained`), remove it from the provider's own list too, or the
@@ -363,6 +374,7 @@ All classes are under `EmailIntegrity\`.
   - `listedIn($domain, $entries)`: whether an entry is the domain or a parent of it, both normalised as
     `domainOf()` does (`Mail.Example.com.` is covered by `example.com`).
 - **`SuppressedAddress`** (Eloquent model): `blocking(...$addresses)`, `mailable($address)`, `unreachable($address)`,
+  `deliverable($address)`, `matching($emailColumn, $canonicalColumn)` (a whereExists()/whereNotExists() subquery),
   `suppress($address, $reason)`, `release($address)`, `key($address, $reason)` (the stored form, or null).
 - **`ReleasedAddress`** (readonly, from `release()`): `rows`, `heldByProvider`.
 - **`SuppressionReason`** (enum): `bounced`, `complained`, `invalid`; `heldByProvider()` (whether the provider keeps its
@@ -404,6 +416,13 @@ All classes are under `EmailIntegrity\`.
   ```
 
 ## Upgrading
+
+### From 4.0
+
+Require `^4.1`; nothing to change. New: `SuppressedAddress::deliverable($address)`, whether a link sent to the address
+can arrive: `mailable()` and not `unreachable()`, in one table read; where you wrote that pair, call it.
+`SuppressedAddress::matching($emailColumn, $canonicalColumn)`, the same keys as a subquery for a query over your users;
+where you matched `suppressed_addresses.email` yourself, call it.
 
 ### From 3.1
 
